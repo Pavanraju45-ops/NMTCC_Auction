@@ -35,7 +35,7 @@ st.markdown("""
 defaults = {
     "auction_started": False,
     "teams": {},
-   "current_player_index": {},
+    "current_player_index": {},
     "sold_players": [],
     "history": [],
     "bid": 5
@@ -144,6 +144,11 @@ if not st.session_state.auction_started:
         st.session_state.auction_started = True
         st.session_state.bid = 5
 
+        # Initialize set-wise indexes
+        st.session_state.current_player_index = {
+            set_name: 0 for set_name in df["set"].unique()
+        }
+
         st.rerun()
 
 # ---------------- AUCTION SCREEN ----------------
@@ -158,13 +163,20 @@ else:
 
     filtered_players = df[df["set"] == selected_set].reset_index(drop=True)
 
-    if st.session_state.current_player_index >= len(filtered_players):
-        st.success("All Players in this Set Auctioned!")
+    current_index = st.session_state.current_player_index[selected_set]
+
+    if current_index >= len(filtered_players):
+        st.success(f"All Players in {selected_set} Auctioned!")
         st.stop()
 
-    player = filtered_players.iloc[
-        st.session_state.current_player_index
-    ]
+    player = filtered_players.iloc[current_index]
+
+    # PROGRESS BAR
+    st.progress(current_index / len(filtered_players))
+
+    st.write(
+        f"Player {current_index+1} of {len(filtered_players)}"
+    )
 
     # TIMER
     st.markdown("### ⏳ Auction Timer")
@@ -227,7 +239,10 @@ else:
 
             team = st.session_state.teams[winning_team]
 
-            if team["purse"] < st.session_state.bid:
+            if len(team["players"]) >= st.session_state.players_per_team:
+                st.error("Team Full!")
+
+            elif team["purse"] < st.session_state.bid:
                 st.error("Insufficient Purse")
 
             else:
@@ -237,13 +252,14 @@ else:
                 sale = {
                     "Player": player["player_name"],
                     "Team": winning_team,
-                    "Price": st.session_state.bid
+                    "Price": st.session_state.bid,
+                    "Set": selected_set
                 }
 
                 st.session_state.sold_players.append(sale)
                 st.session_state.history.append(sale)
 
-                st.session_state.current_player_index += 1
+                st.session_state.current_player_index[selected_set] += 1
                 st.session_state.bid = 5
 
                 st.success("🔨 SOLD!")
@@ -254,7 +270,8 @@ else:
     # UNSOLD
     with col5:
         if st.button("❌ UNSOLD"):
-            st.session_state.current_player_index += 1
+            st.session_state.current_player_index[selected_set] += 1
+            st.session_state.bid = 5
             st.rerun()
 
     # UNDO
@@ -273,7 +290,7 @@ else:
 
                 st.session_state.sold_players.pop()
 
-                st.session_state.current_player_index -= 1
+                st.session_state.current_player_index[last["Set"]] -= 1
 
                 st.rerun()
 
@@ -314,7 +331,7 @@ else:
         "auction_results.xlsx"
     )
 
-    # DOWNLOAD POST AUCTION TEAMS
+    # POST AUCTION TEAM DOWNLOAD
     st.divider()
     st.header("Post Auction Team Sheets")
 
