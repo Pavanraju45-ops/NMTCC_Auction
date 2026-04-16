@@ -9,8 +9,32 @@ SAVE_FILE = "auction_state.pkl"
 
 st.set_page_config(page_title="NMTCC Auction", layout="wide")
 
+# ---------------- CSS ----------------
+st.markdown("""
+<style>
+.main-title {
+    text-align:center;
+    font-size:60px;
+    font-weight:bold;
+    color:#FFD700;
+    margin-top:100px;
+}
+.sub-text {
+    text-align:center;
+    font-size:20px;
+    color:grey;
+}
+div.stButton > button {
+    width:100%;
+    height:3em;
+    font-size:20px;
+    border-radius:10px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# ---------------- SAVE / LOAD FUNCTIONS ----------------
+
+# ---------------- SAVE / LOAD ----------------
 def save_state():
     with open(SAVE_FILE, "wb") as f:
         pickle.dump(dict(st.session_state), f)
@@ -25,7 +49,6 @@ def load_state():
             st.session_state[key] = value
 
 
-# LOAD PREVIOUS SESSION ON START
 if "loaded" not in st.session_state:
     load_state()
     st.session_state.loaded = True
@@ -33,7 +56,7 @@ if "loaded" not in st.session_state:
 
 # ---------------- DEFAULTS ----------------
 defaults = {
-    "page": "setup",
+    "page": "home",
     "teams": {},
     "players_df": None,
     "players_per_team": 11,
@@ -49,20 +72,53 @@ for key, val in defaults.items():
         st.session_state[key] = val
 
 
-# ---------------- TITLE ----------------
-st.title("🏏 NMTCC Auction")
+# ==========================================================
+# HOME PAGE
+# ==========================================================
+if st.session_state.page == "home":
+
+    st.markdown(
+        "<div class='main-title'>🏏 NMTCC AUCTION</div>",
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        "<div class='sub-text'>Welcome to the Official Auction Simulator</div>",
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+    st.write("")
+    st.write("")
+
+    col1, col2, col3 = st.columns([2,2,2])
+
+    with col2:
+        if st.button("🚀 START"):
+            st.session_state.page = "setup"
+            save_state()
+            st.rerun()
 
 
-# =====================================================
+# ==========================================================
 # SETUP PAGE
-# =====================================================
-if st.session_state.page == "setup":
+# ==========================================================
+elif st.session_state.page == "setup":
+
+    st.title("Auction Setup")
+
+    if st.button("⬅ Back to Home"):
+        st.session_state.page = "home"
+        save_state()
+        st.rerun()
 
     num_teams = st.number_input("Number of Teams", 2, 20, 2)
 
     teams = {}
 
     for i in range(num_teams):
+
+        st.subheader(f"Team {i+1}")
 
         col1, col2 = st.columns(2)
 
@@ -85,7 +141,11 @@ if st.session_state.page == "setup":
 
     purse = st.number_input("Auction Purse", 10, 1000, 100)
 
-    if st.button("Start Auction"):
+    if st.button("Proceed to Auction"):
+
+        if uploaded_file is None:
+            st.error("Upload Excel File")
+            st.stop()
 
         df = pd.read_excel(uploaded_file)
 
@@ -111,10 +171,17 @@ if st.session_state.page == "setup":
         st.rerun()
 
 
-# =====================================================
+# ==========================================================
 # AUCTION PAGE
-# =====================================================
+# ==========================================================
 elif st.session_state.page == "auction":
+
+    st.title("Live Auction")
+
+    if st.button("⬅ Back to Setup"):
+        st.session_state.page = "setup"
+        save_state()
+        st.rerun()
 
     df = st.session_state.players_df
 
@@ -151,7 +218,6 @@ elif st.session_state.page == "auction":
 
     st.subheader(player["player_name"])
     st.write("Base Price:", player["base_price"])
-
     st.write("Current Bid:", st.session_state.bid)
 
     if st.button("Increase Bid"):
@@ -188,27 +254,25 @@ elif st.session_state.page == "auction":
         st.rerun()
 
 
-# =====================================================
+# ==========================================================
 # SUMMARY PAGE
-# =====================================================
+# ==========================================================
 elif st.session_state.page == "summary":
 
-    st.success("Auction Completed!")
+    st.title("Auction Summary")
 
-    # ---------------- TEAM WISE TABLES ----------------
     for team, details in st.session_state.teams.items():
 
         st.subheader(team)
 
         team_df = pd.DataFrame({
             "Captain": [details["captain"]] * len(details["players"]),
-            "Players Bought": details["players"],
+            "Players": details["players"],
             "Remaining Purse": [details["purse"]] * len(details["players"])
         })
 
         st.dataframe(team_df)
 
-    # ---------------- MULTI SHEET EXCEL ----------------
     def generate_excel():
 
         output = BytesIO()
@@ -219,25 +283,20 @@ elif st.session_state.page == "summary":
 
                 team_df = pd.DataFrame({
                     "Captain": [details["captain"]] * len(details["players"]),
-                    "Players Bought": details["players"],
+                    "Players": details["players"],
                     "Remaining Purse": [details["purse"]] * len(details["players"])
                 })
 
-                team_df.to_excel(
-                    writer,
-                    sheet_name=team[:31],
-                    index=False
-                )
+                team_df.to_excel(writer, sheet_name=team[:31], index=False)
 
         return output.getvalue()
 
     st.download_button(
-        "📥 Download Team Wise Auction Results",
+        "📥 Download Team Wise Results",
         generate_excel(),
-        "Team_Wise_Auction_Results.xlsx"
+        "Team_Wise_Auction.xlsx"
     )
 
-    # ---------------- RESET ----------------
     if st.button("Restart Auction"):
 
         if os.path.exists(SAVE_FILE):
