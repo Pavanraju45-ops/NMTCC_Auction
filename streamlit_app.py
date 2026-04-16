@@ -35,7 +35,7 @@ st.markdown("""
 defaults = {
     "auction_started": False,
     "teams": {},
-    "current_player_index": 0,
+   "current_player_index": {},
     "sold_players": [],
     "history": [],
     "bid": 5
