@@ -144,7 +144,24 @@ elif st.session_state.page == "auction":
     # Show RTM balance
     if st.session_state.rtm_enabled:
         st.subheader("RTM Remaining")
-        st.write(st.session_state.rtm_remaining)
+
+cols = st.columns(len(st.session_state.rtm_remaining))
+
+for i, (team, count) in enumerate(st.session_state.rtm_remaining.items()):
+    with cols[i]:
+        st.markdown(f"""
+        <div style="
+            background-color:#1e293b;
+            padding:15px;
+            border-radius:10px;
+            text-align:center;
+            color:white;
+        ">
+            <h4>{team}</h4>
+            <h2 style="color:#FFD700;">{count}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
 
     # Find next player
     while st.session_state.current_set_idx < len(st.session_state.set_order):
