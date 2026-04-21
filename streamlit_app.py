@@ -77,16 +77,11 @@ elif st.session_state.page == "setup":
     if st.button("Next"):
 
         if uploaded is None:
-            st.error("Please upload Excel file")
+            st.error("Upload Excel file")
             st.stop()
 
         df = pd.read_excel(uploaded)
         df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-
-        required = ["player_name", "set", "base_price"]
-        if not all(col in df.columns for col in required):
-            st.error("Excel must have: player_name, set, base_price")
-            st.stop()
 
         st.session_state.teams = teams
         st.session_state.players_df = df
@@ -142,12 +137,7 @@ elif st.session_state.page == "auction":
         for i, (team, count) in enumerate(st.session_state.rtm_remaining.items()):
             with cols[i]:
                 color = "#22c55e" if count > 0 else "#ef4444"
-                st.markdown(f"""
-                <div style="background:#1e293b;padding:15px;border-radius:10px;text-align:center;">
-                    <h4 style="color:white;">{team}</h4>
-                    <h2 style="color:{color};">{count}</h2>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"<h4>{team}</h4><h2 style='color:{color}'>{count}</h2>", unsafe_allow_html=True)
 
     # GET PLAYER
     while st.session_state.current_set_idx < len(st.session_state.set_order):
@@ -172,11 +162,21 @@ elif st.session_state.page == "auction":
 
     st.write("Current Bid:", st.session_state.bid)
 
-    bid_team = st.selectbox("Bidding Team", list(st.session_state.teams.keys()))
+    # ✔ FILTER VALID TEAMS
+    valid_teams = [
+        t for t in st.session_state.teams
+        if st.session_state.teams[t]["purse"] >= st.session_state.bid
+    ]
+
+    if not valid_teams:
+        st.error("No team can afford this player. Reduce bid.")
+        st.stop()
+
+    bid_team = st.selectbox("Bidding Team", valid_teams)
+    st.session_state.current_bid_team = bid_team
 
     if st.button("Increase Bid"):
         st.session_state.bid += 2 if st.session_state.bid < 15 else 5
-        st.session_state.current_bid_team = bid_team
         st.rerun()
 
     # ================= SELL =================
@@ -187,28 +187,28 @@ elif st.session_state.page == "auction":
 
         if st.session_state.teams[final_team]["purse"] < price:
             st.error(f"{final_team} does not have enough purse!")
-            st.stop()
+        else:
 
-        if st.session_state.rtm_enabled and last_team != "NA":
-            if st.session_state.rtm_remaining[last_team] > 0:
-                st.session_state.rtm_stage = "ask"
-                st.session_state.rtm_player = player
-                st.session_state.rtm_price = price
-                st.session_state.rtm_new_team = final_team
-                st.session_state.rtm_old_team = last_team
-                st.rerun()
+            if st.session_state.rtm_enabled and last_team != "NA":
+                if st.session_state.rtm_remaining[last_team] > 0:
+                    st.session_state.rtm_stage = "ask"
+                    st.session_state.rtm_player = player
+                    st.session_state.rtm_price = price
+                    st.session_state.rtm_new_team = final_team
+                    st.session_state.rtm_old_team = last_team
+                    st.rerun()
 
-        # NORMAL SALE
-        st.session_state.teams[final_team]["players"].append({
-            "player": player["player_name"],
-            "base": player["base_price"],
-            "sold": price
-        })
-        st.session_state.teams[final_team]["purse"] -= price
+            # NORMAL SALE
+            st.session_state.teams[final_team]["players"].append({
+                "player": player["player_name"],
+                "base": player["base_price"],
+                "sold": price
+            })
+            st.session_state.teams[final_team]["purse"] -= price
 
-        st.session_state.set_index[current_set] += 1
-        st.session_state.bid = 5
-        st.rerun()
+            st.session_state.set_index[current_set] += 1
+            st.session_state.bid = 5
+            st.rerun()
 
     # ================= RTM FLOW =================
     if st.session_state.rtm_stage == "ask":
@@ -221,12 +221,11 @@ elif st.session_state.page == "auction":
 
         if st.button("Skip RTM"):
             new_team = st.session_state.rtm_new_team
-            player = st.session_state.rtm_player
             price = st.session_state.rtm_price
 
             st.session_state.teams[new_team]["players"].append({
-                "player": player["player_name"],
-                "base": player["base_price"],
+                "player": st.session_state.rtm_player["player_name"],
+                "base": st.session_state.rtm_player["base_price"],
                 "sold": price
             })
             st.session_state.teams[new_team]["purse"] -= price
@@ -248,45 +247,45 @@ elif st.session_state.page == "auction":
     elif st.session_state.rtm_stage == "decision":
 
         if st.button("Accept"):
+
             team = st.session_state.rtm_new_team
             price = st.session_state.rtm_counter_price
 
             if st.session_state.teams[team]["purse"] < price:
-                st.error(f"{team} does not have enough purse!")
-                st.stop()
+                st.error(f"{team} cannot afford this RTM price!")
+            else:
+                st.session_state.teams[team]["players"].append({
+                    "player": st.session_state.rtm_player["player_name"],
+                    "base": st.session_state.rtm_player["base_price"],
+                    "sold": price
+                })
+                st.session_state.teams[team]["purse"] -= price
 
-            st.session_state.teams[team]["players"].append({
-                "player": st.session_state.rtm_player["player_name"],
-                "base": st.session_state.rtm_player["base_price"],
-                "sold": price
-            })
-            st.session_state.teams[team]["purse"] -= price
-
-            st.session_state.rtm_stage = None
-            st.session_state.set_index[current_set] += 1
-            st.session_state.bid = 5
-            st.rerun()
+                st.session_state.rtm_stage = None
+                st.session_state.set_index[current_set] += 1
+                st.session_state.bid = 5
+                st.rerun()
 
         if st.button("Reject"):
+
             team = st.session_state.rtm_old_team
             price = st.session_state.rtm_counter_price
 
             if st.session_state.teams[team]["purse"] < price:
-                st.error(f"{team} does not have enough purse!")
-                st.stop()
+                st.error(f"{team} cannot afford RTM!")
+            else:
+                st.session_state.teams[team]["players"].append({
+                    "player": st.session_state.rtm_player["player_name"],
+                    "base": st.session_state.rtm_player["base_price"],
+                    "sold": price
+                })
+                st.session_state.teams[team]["purse"] -= price
+                st.session_state.rtm_remaining[team] -= 1
 
-            st.session_state.teams[team]["players"].append({
-                "player": st.session_state.rtm_player["player_name"],
-                "base": st.session_state.rtm_player["base_price"],
-                "sold": price
-            })
-            st.session_state.teams[team]["purse"] -= price
-            st.session_state.rtm_remaining[team] -= 1
-
-            st.session_state.rtm_stage = None
-            st.session_state.set_index[current_set] += 1
-            st.session_state.bid = 5
-            st.rerun()
+                st.session_state.rtm_stage = None
+                st.session_state.set_index[current_set] += 1
+                st.session_state.bid = 5
+                st.rerun()
 
     # TEAM TABLES
     st.divider()
