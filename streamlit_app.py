@@ -351,7 +351,7 @@ for i, (team, count) in enumerate(st.session_state.rtm_remaining.items()):
 # =========================================================
 # TRADE WINDOW
 # =========================================================
- elif st.session_state.page == "trade":
+   elif st.session_state.page == "trade":
 
     st.title("Trade Window")
 
