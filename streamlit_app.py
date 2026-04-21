@@ -5,7 +5,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="NMTCC Auction", layout="wide")
 
-# ---------------- STATE ----------------
+# ---------------- DEFAULT STATE ----------------
 defaults = {
     "page": "home",
     "teams": {},
@@ -23,10 +23,11 @@ defaults = {
     "rtm_remaining": {},
     "current_bid_team": None,
 
-    # RTM FLOW
+    # RTM FLOW STATES
     "rtm_stage": None,
     "rtm_player": None,
     "rtm_price": 0,
+    "rtm_counter_price": 0,
     "rtm_new_team": None,
     "rtm_old_team": None
 }
@@ -77,8 +78,17 @@ elif st.session_state.page == "setup":
 
     if st.button("Next"):
 
+        if uploaded is None:
+            st.error("Please upload Excel file")
+            st.stop()
+
         df = pd.read_excel(uploaded)
         df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+
+        required = ["player_name", "set", "base_price"]
+        if not all(col in df.columns for col in required):
+            st.error("Excel must have: player_name, set, base_price")
+            st.stop()
 
         st.session_state.teams = teams
         st.session_state.players_df = df
@@ -88,9 +98,11 @@ elif st.session_state.page == "setup":
         for t in teams:
             teams[t]["purse"] = purse
 
+        # Set order
         st.session_state.set_order = list(df["set"].unique())
         st.session_state.current_set_idx = 0
 
+        # Shuffle players within each set
         for s in st.session_state.set_order:
             players = df[df["set"] == s].to_dict("records")
             random.shuffle(players)
@@ -107,7 +119,7 @@ elif st.session_state.page == "setup":
 
 
 # =========================================================
-# RTM CONFIG
+# RTM SETUP
 # =========================================================
 elif st.session_state.page == "rtm":
 
@@ -129,13 +141,12 @@ elif st.session_state.page == "rtm":
 # =========================================================
 elif st.session_state.page == "auction":
 
-    # SHOW RTM BALANCE
+    # Show RTM balance
     if st.session_state.rtm_enabled:
         st.subheader("RTM Remaining")
-        for t, v in st.session_state.rtm_remaining.items():
-            st.write(f"{t}: {v}")
+        st.write(st.session_state.rtm_remaining)
 
-    # GET PLAYER
+    # Find next player
     while st.session_state.current_set_idx < len(st.session_state.set_order):
 
         current_set = st.session_state.set_order[st.session_state.current_set_idx]
@@ -166,17 +177,13 @@ elif st.session_state.page == "auction":
         st.session_state.current_bid_team = bid_team
         st.rerun()
 
-
-    # =====================================================
-    # SELL BUTTON (UPDATED)
-    # =====================================================
+    # ---------------- SELL ----------------
     if st.button("Sell Player"):
 
         final_team = st.session_state.current_bid_team
         price = st.session_state.bid
 
         if st.session_state.rtm_enabled and last_team != "NA":
-
             if st.session_state.rtm_remaining[last_team] > 0:
 
                 st.session_state.rtm_stage = "ask"
@@ -184,10 +191,9 @@ elif st.session_state.page == "auction":
                 st.session_state.rtm_price = price
                 st.session_state.rtm_new_team = final_team
                 st.session_state.rtm_old_team = last_team
-
                 st.rerun()
 
-        # NORMAL SALE
+        # Normal sale
         st.session_state.teams[final_team]["players"].append({
             "player": player["player_name"],
             "base": player["base_price"],
@@ -195,16 +201,16 @@ elif st.session_state.page == "auction":
         })
 
         st.session_state.teams[final_team]["purse"] -= price
-
         st.session_state.set_index[current_set] += 1
         st.session_state.bid = 5
 
         st.rerun()
 
+    # =====================================================
+    # RTM FLOW (NEW COUNTER SYSTEM)
+    # =====================================================
 
-    # =====================================================
-    # RTM FLOW (UPDATED)
-    # =====================================================
+    # STEP 1: ASK
     if st.session_state.rtm_stage == "ask":
 
         st.warning(f"{st.session_state.rtm_old_team} can use RTM")
@@ -213,7 +219,7 @@ elif st.session_state.page == "auction":
 
         with col1:
             if st.button("Use RTM"):
-                st.session_state.rtm_stage = "decision"
+                st.session_state.rtm_stage = "counter"
                 st.rerun()
 
         with col2:
@@ -237,19 +243,38 @@ elif st.session_state.page == "auction":
 
                 st.rerun()
 
+    # STEP 2: OLD TEAM ENTERS NEW PRICE
+    elif st.session_state.rtm_stage == "counter":
 
+        st.info(f"{st.session_state.rtm_old_team}, enter your RTM price")
+
+        new_price = st.number_input(
+            "Enter New Price",
+            min_value=st.session_state.rtm_price,
+            value=st.session_state.rtm_price
+        )
+
+        if st.button("Submit RTM Price"):
+            st.session_state.rtm_counter_price = new_price
+            st.session_state.rtm_stage = "decision"
+            st.rerun()
+
+    # STEP 3: NEW TEAM DECISION
     elif st.session_state.rtm_stage == "decision":
 
-        st.warning(f"{st.session_state.rtm_new_team}, do you want to retain the player?")
+        st.warning(
+            f"{st.session_state.rtm_new_team}, accept ₹{st.session_state.rtm_counter_price}?"
+        )
 
         col1, col2 = st.columns(2)
 
+        # ACCEPT
         with col1:
-            if st.button("Accept (Keep Player)"):
+            if st.button("Accept"):
 
                 new_team = st.session_state.rtm_new_team
                 player = st.session_state.rtm_player
-                price = st.session_state.rtm_price
+                price = st.session_state.rtm_counter_price
 
                 st.session_state.teams[new_team]["players"].append({
                     "player": player["player_name"],
@@ -265,12 +290,13 @@ elif st.session_state.page == "auction":
 
                 st.rerun()
 
+        # REJECT
         with col2:
-            if st.button("Reject (Give to RTM Team)"):
+            if st.button("Reject"):
 
                 old_team = st.session_state.rtm_old_team
                 player = st.session_state.rtm_player
-                price = st.session_state.rtm_price
+                price = st.session_state.rtm_counter_price
 
                 st.session_state.teams[old_team]["players"].append({
                     "player": player["player_name"],
@@ -287,19 +313,13 @@ elif st.session_state.page == "auction":
 
                 st.rerun()
 
-
-    # =====================================================
-    # UNSOLD
-    # =====================================================
+    # ---------------- UNSOLD ----------------
     if st.button("Unsold"):
         st.session_state.unsold.append(player)
         st.session_state.set_index[current_set] += 1
         st.rerun()
 
-
-    # =====================================================
-    # TEAM TABLES
-    # =====================================================
+    # ---------------- TEAM TABLES ----------------
     st.divider()
 
     cols = st.columns(len(st.session_state.teams))
@@ -352,6 +372,7 @@ elif st.session_state.page == "trade":
     if st.button("Finish Trade"):
         st.session_state.page = "summary"
         st.rerun()
+
 
 # =========================================================
 # SUMMARY
