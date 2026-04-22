@@ -34,7 +34,6 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-
 # =========================================================
 # HOME
 # =========================================================
@@ -46,7 +45,6 @@ if st.session_state.page == "home":
     if st.button("🚀 Start Auction"):
         st.session_state.page = "setup"
         st.rerun()
-
 
 # =========================================================
 # SETUP
@@ -85,8 +83,6 @@ elif st.session_state.page == "setup":
 
         st.session_state.teams = teams
         st.session_state.players_df = df
-        st.session_state.players_per_team = players_per_team
-        st.session_state.purse = purse
 
         for t in teams:
             teams[t]["purse"] = purse
@@ -108,7 +104,6 @@ elif st.session_state.page == "setup":
 
         st.rerun()
 
-
 # =========================================================
 # RTM SETUP
 # =========================================================
@@ -124,221 +119,126 @@ elif st.session_state.page == "rtm":
         st.session_state.page = "auction"
         st.rerun()
 
-
 # =========================================================
-# AUCTION
+# AUCTION (UPDATED UI)
 # =========================================================
 elif st.session_state.page == "auction":
 
-    # RTM DISPLAY
-    if st.session_state.rtm_enabled:
-        st.subheader("RTM Remaining")
-        cols = st.columns(len(st.session_state.rtm_remaining))
-        for i, (team, count) in enumerate(st.session_state.rtm_remaining.items()):
-            with cols[i]:
-                color = "#22c55e" if count > 0 else "#ef4444"
-                st.markdown(f"<h4>{team}</h4><h2 style='color:{color}'>{count}</h2>", unsafe_allow_html=True)
+    left, right = st.columns([2, 1])
 
-    # GET PLAYER
-    while st.session_state.current_set_idx < len(st.session_state.set_order):
-        current_set = st.session_state.set_order[st.session_state.current_set_idx]
-        idx = st.session_state.set_index[current_set]
+    # ---------- LEFT PANEL ----------
+    with left:
 
-        if idx < len(st.session_state.set_players[current_set]):
-            player = st.session_state.set_players[current_set][idx]
-            break
-        else:
-            st.session_state.current_set_idx += 1
-    else:
-        st.session_state.page = "trade"
-        st.rerun()
+        # RTM DISPLAY
+        if st.session_state.rtm_enabled:
+            st.markdown("### RTM Remaining")
+            cols = st.columns(len(st.session_state.rtm_remaining))
+            for i, (team, count) in enumerate(st.session_state.rtm_remaining.items()):
+                with cols[i]:
+                    color = "#22c55e" if count > 0 else "#ef4444"
+                    st.markdown(f"""
+                    <div style="background:#1e293b;padding:10px;border-radius:10px;text-align:center;">
+                        <h5 style="color:white;">{team}</h5>
+                        <h2 style="color:{color};margin:0;">{count}</h2>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-    st.subheader(player["player_name"])
-    st.write("Base Price:", player["base_price"])
+        # GET PLAYER
+        while st.session_state.current_set_idx < len(st.session_state.set_order):
+            current_set = st.session_state.set_order[st.session_state.current_set_idx]
+            idx = st.session_state.set_index[current_set]
 
-    last_team = "NA"
-    if st.session_state.rtm_enabled:
-        last_team = st.selectbox("Previous Team", ["NA"] + list(st.session_state.teams.keys()))
-
-    st.write("Current Bid:", st.session_state.bid)
-
-    # ✔ FILTER VALID TEAMS
-    valid_teams = [
-        t for t in st.session_state.teams
-        if st.session_state.teams[t]["purse"] >= st.session_state.bid
-    ]
-
-    if not valid_teams:
-        st.error("No team can afford this player. Reduce bid.")
-        st.stop()
-
-    bid_team = st.selectbox("Bidding Team", valid_teams)
-    st.session_state.current_bid_team = bid_team
-
-    if st.button("Increase Bid"):
-        st.session_state.bid += 2 if st.session_state.bid < 15 else 5
-        st.rerun()
-
-    # ================= SELL =================
-    if st.button("Sell Player"):
-
-        final_team = st.session_state.current_bid_team
-        price = st.session_state.bid
-
-        if st.session_state.teams[final_team]["purse"] < price:
-            st.error(f"{final_team} does not have enough purse!")
-        else:
-
-            if st.session_state.rtm_enabled and last_team != "NA":
-                if st.session_state.rtm_remaining[last_team] > 0:
-                    st.session_state.rtm_stage = "ask"
-                    st.session_state.rtm_player = player
-                    st.session_state.rtm_price = price
-                    st.session_state.rtm_new_team = final_team
-                    st.session_state.rtm_old_team = last_team
-                    st.rerun()
-
-            # NORMAL SALE
-            st.session_state.teams[final_team]["players"].append({
-                "player": player["player_name"],
-                "base": player["base_price"],
-                "sold": price
-            })
-            st.session_state.teams[final_team]["purse"] -= price
-
-            st.session_state.set_index[current_set] += 1
-            st.session_state.bid = 5
-            st.rerun()
-
-    # ================= RTM FLOW =================
-    if st.session_state.rtm_stage == "ask":
-
-        st.warning(f"{st.session_state.rtm_old_team} can use RTM")
-
-        if st.button("Use RTM"):
-            st.session_state.rtm_stage = "counter"
-            st.rerun()
-
-        if st.button("Skip RTM"):
-            new_team = st.session_state.rtm_new_team
-            price = st.session_state.rtm_price
-
-            st.session_state.teams[new_team]["players"].append({
-                "player": st.session_state.rtm_player["player_name"],
-                "base": st.session_state.rtm_player["base_price"],
-                "sold": price
-            })
-            st.session_state.teams[new_team]["purse"] -= price
-
-            st.session_state.rtm_stage = None
-            st.session_state.set_index[current_set] += 1
-            st.session_state.bid = 5
-            st.rerun()
-
-    elif st.session_state.rtm_stage == "counter":
-
-        new_price = st.number_input("Enter RTM Price", min_value=st.session_state.rtm_price)
-
-        if st.button("Submit Price"):
-            st.session_state.rtm_counter_price = new_price
-            st.session_state.rtm_stage = "decision"
-            st.rerun()
-
-    elif st.session_state.rtm_stage == "decision":
-
-        if st.button("Accept"):
-
-            team = st.session_state.rtm_new_team
-            price = st.session_state.rtm_counter_price
-
-            if st.session_state.teams[team]["purse"] < price:
-                st.error(f"{team} cannot afford this RTM price!")
+            if idx < len(st.session_state.set_players[current_set]):
+                player = st.session_state.set_players[current_set][idx]
+                break
             else:
-                st.session_state.teams[team]["players"].append({
-                    "player": st.session_state.rtm_player["player_name"],
-                    "base": st.session_state.rtm_player["base_price"],
+                st.session_state.current_set_idx += 1
+        else:
+            st.session_state.page = "trade"
+            st.rerun()
+
+        # PLAYER NAME (HIGHLIGHTED)
+        st.markdown(f"""
+        <div style="text-align:center;">
+            <h1 style="color:#38bdf8; font-size:48px;">{player['player_name']}</h1>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # PRICES
+        col1, col2 = st.columns(2)
+
+        col1.markdown(f"<h2>Base Price<br><span style='color:#22c55e'>{player['base_price']}</span></h2>", unsafe_allow_html=True)
+        col2.markdown(f"<h2>Current Bid<br><span style='color:#facc15'>{st.session_state.bid}</span></h2>", unsafe_allow_html=True)
+
+        last_team = "NA"
+        if st.session_state.rtm_enabled:
+            last_team = st.selectbox("Previous Team", ["NA"] + list(st.session_state.teams.keys()))
+
+        valid_teams = [
+            t for t in st.session_state.teams
+            if st.session_state.teams[t]["purse"] >= st.session_state.bid
+        ]
+
+        bid_team = st.selectbox("Bidding Team", valid_teams)
+        st.session_state.current_bid_team = bid_team
+
+        colA, colB = st.columns(2)
+
+        if colA.button("Increase Bid"):
+            st.session_state.bid += 2 if st.session_state.bid < 15 else 5
+            st.rerun()
+
+        if colB.button("Sell Player"):
+
+            final_team = bid_team
+            price = st.session_state.bid
+
+            if st.session_state.teams[final_team]["purse"] < price:
+                st.error(f"{final_team} does not have enough purse!")
+            else:
+
+                if st.session_state.rtm_enabled and last_team != "NA":
+                    if st.session_state.rtm_remaining[last_team] > 0:
+                        st.session_state.rtm_stage = "ask"
+                        st.session_state.rtm_player = player
+                        st.session_state.rtm_price = price
+                        st.session_state.rtm_new_team = final_team
+                        st.session_state.rtm_old_team = last_team
+                        st.rerun()
+
+                st.session_state.teams[final_team]["players"].append({
+                    "player": player["player_name"],
+                    "base": player["base_price"],
                     "sold": price
                 })
-                st.session_state.teams[team]["purse"] -= price
+                st.session_state.teams[final_team]["purse"] -= price
 
-                st.session_state.rtm_stage = None
                 st.session_state.set_index[current_set] += 1
                 st.session_state.bid = 5
                 st.rerun()
 
-        if st.button("Reject"):
+    # ---------- RIGHT PANEL ----------
+    with right:
+        st.markdown("## 🏏 Teams")
 
-            team = st.session_state.rtm_old_team
-            price = st.session_state.rtm_counter_price
-
-            if st.session_state.teams[team]["purse"] < price:
-                st.error(f"{team} cannot afford RTM!")
-            else:
-                st.session_state.teams[team]["players"].append({
-                    "player": st.session_state.rtm_player["player_name"],
-                    "base": st.session_state.rtm_player["base_price"],
-                    "sold": price
-                })
-                st.session_state.teams[team]["purse"] -= price
-                st.session_state.rtm_remaining[team] -= 1
-
-                st.session_state.rtm_stage = None
-                st.session_state.set_index[current_set] += 1
-                st.session_state.bid = 5
-                st.rerun()
-
-    # TEAM TABLES
-    st.divider()
-    cols = st.columns(len(st.session_state.teams))
-    for i, (team, data) in enumerate(st.session_state.teams.items()):
-        with cols[i]:
-            st.subheader(team)
-            st.write("Purse:", data["purse"])
-            st.dataframe(pd.DataFrame(data["players"]))
-
+        for team, data in st.session_state.teams.items():
+            st.markdown(f"### {team} (₹{data['purse']})")
+            st.dataframe(pd.DataFrame(data["players"]), height=200)
 
 # =========================================================
-# TRADE WINDOW
+# TRADE
 # =========================================================
 elif st.session_state.page == "trade":
 
     st.title("Trade Window")
 
-    teams = list(st.session_state.teams.keys())
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        t1 = st.selectbox("Team 1", teams)
-        st.dataframe(pd.DataFrame(st.session_state.teams[t1]["players"]))
-
-    with col2:
-        t2 = st.selectbox("Team 2", teams)
-        st.dataframe(pd.DataFrame(st.session_state.teams[t2]["players"]))
-
-    p1 = st.selectbox("Player Team 1", [p["player"] for p in st.session_state.teams[t1]["players"]])
-    p2 = st.selectbox("Player Team 2", [p["player"] for p in st.session_state.teams[t2]["players"]])
-
-    if st.button("Execute Trade"):
-
-        team1 = st.session_state.teams[t1]["players"]
-        team2 = st.session_state.teams[t2]["players"]
-
-        player1 = next(p for p in team1 if p["player"] == p1)
-        player2 = next(p for p in team2 if p["player"] == p2)
-
-        team1.remove(player1)
-        team2.remove(player2)
-
-        team1.append(player2)
-        team2.append(player1)
-
-        st.success("Trade Completed")
+    for team, data in st.session_state.teams.items():
+        st.subheader(team)
+        st.dataframe(pd.DataFrame(data["players"]))
 
     if st.button("Finish Trade"):
         st.session_state.page = "summary"
         st.rerun()
-
 
 # =========================================================
 # SUMMARY
