@@ -1003,8 +1003,8 @@ elif st.session_state.page == "auction":
         )
 
     with right:
-        # Header row: next-step indicator + quick actions
-        r1, r2, r3 = st.columns([2, 1, 1])
+        # Header row: next-step indicator + base reset
+        r1, r2 = st.columns([4, 1])
         with r1:
             ladder_parts = [f"<{t['up_to']}→+{t['step']}" for t in tiers]
             ladder_str = "; ".join(ladder_parts)
@@ -1014,17 +1014,6 @@ elif st.session_state.page == "auction":
                 st.session_state.bid = base_price
                 st.session_state.current_bid_team = None
                 st.rerun()
-        with r3:
-            custom = st.number_input(
-                "Set ₹",
-                min_value=base_price,
-                value=int(st.session_state.bid),
-                step=1,
-                key="custom_bid_input",
-                label_visibility="collapsed",
-            )
-            if int(custom) != int(st.session_state.bid):
-                st.session_state.bid = int(custom)
 
         # Per-team bid buttons — native st.button, styled per-team via the
         # .st-key-<key> class Streamlit attaches to keyed elements. No href,
@@ -1090,24 +1079,10 @@ elif st.session_state.page == "auction":
                 )
                 st.rerun()
 
-        # RTM "previous team" + SELL
-        sell_cols = st.columns([2, 2])
+        # SELL + RTM actions
+        sell_cols = st.columns([3, 1])
         with sell_cols[0]:
-            if st.session_state.rtm_enabled:
-                last_team = st.selectbox(
-                    "Previous team (RTM eligible)",
-                    ["NA"] + list(st.session_state.teams.keys()),
-                    key="last_team_select",
-                )
-            else:
-                last_team = "NA"
-                st.caption("RTM disabled")
-        with sell_cols[1]:
-            st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
-            sell_disabled = (
-                st.session_state.rtm_stage is not None
-                or st.session_state.current_bid_team is None
-            )
+            sell_disabled = st.session_state.current_bid_team is None
             sell_label = (
                 f"✅ SELL to {st.session_state.current_bid_team} @ ₹{st.session_state.bid}"
                 if st.session_state.current_bid_team
@@ -1119,6 +1094,44 @@ elif st.session_state.page == "auction":
                 use_container_width=True,
                 disabled=sell_disabled,
             )
+        with sell_cols[1]:
+            rtm_disabled = (
+                not st.session_state.rtm_enabled
+                or st.session_state.current_bid_team is None
+            )
+            with st.popover(
+                "🔁 RTM",
+                use_container_width=True,
+                disabled=rtm_disabled,
+            ):
+                st.caption(
+                    f"Pick the team exercising RTM at ₹{st.session_state.bid}. "
+                    f"They win the player and their RTM count drops by 1."
+                )
+                for tname, tdata in st.session_state.teams.items():
+                    rtm_left = int(tdata.get("rtm_remaining", 0))
+                    if rtm_left <= 0:
+                        continue
+                    if tdata["purse"] < int(st.session_state.bid):
+                        continue
+                    if tname == st.session_state.current_bid_team:
+                        # can't RTM against yourself
+                        continue
+                    if st.button(
+                        f"{tname} — RTM × {rtm_left}",
+                        key=f"rtm_pick_{tname}",
+                        use_container_width=True,
+                    ):
+                        _finalize_sale(
+                            player,
+                            tname,
+                            int(st.session_state.bid),
+                            is_rtm=True,
+                        )
+                        st.session_state.set_index[current_set] += 1
+                        st.session_state.bid = 0
+                        st.session_state.current_bid_team = None
+                        st.rerun()
 
         # Bid-ladder editor (editable mid-auction)
         with st.expander("⚙️ Bid ladder", expanded=False):
@@ -1144,118 +1157,18 @@ elif st.session_state.page == "auction":
                 st.success("Ladder updated")
                 st.rerun()
 
-    # ---------------- Sell action (outside the columns) ----------------
+    # ---------------- Sell action ----------------
     if sell_clicked:
         final_team = st.session_state.current_bid_team
         price = int(st.session_state.bid)
         if st.session_state.teams[final_team]["purse"] < price:
             st.error(f"{final_team} does not have enough purse!")
-        elif (
-            st.session_state.rtm_enabled
-            and last_team != "NA"
-            and last_team != final_team
-            and st.session_state.teams[last_team]["rtm_remaining"] > 0
-        ):
-            st.session_state.rtm_stage = "ask"
-            st.session_state.rtm_player = player
-            st.session_state.rtm_price = price
-            st.session_state.rtm_new_team = final_team
-            st.session_state.rtm_old_team = last_team
-            log_event(
-                st.session_state.auction_id,
-                "rtm_triggered",
-                player=player["player_name"],
-                new_team=final_team,
-                old_team=last_team,
-                amount=price,
-            )
-            st.rerun()
         else:
             _finalize_sale(player, final_team, price, is_rtm=False)
             st.session_state.set_index[current_set] += 1
             st.session_state.bid = 0
             st.session_state.current_bid_team = None
             st.rerun()
-
-    # ---------------- RTM inline panel ----------------
-    if st.session_state.rtm_stage is not None:
-        with st.container(border=True):
-            st.markdown(
-                f"**🔁 RTM — {st.session_state.rtm_old_team}** can match **{st.session_state.rtm_new_team}**'s "
-                f"bid of **₹{st.session_state.rtm_price}** for **{st.session_state.rtm_player['player_name']}**."
-            )
-
-            if st.session_state.rtm_stage == "ask":
-                a, b, _ = st.columns([1, 1, 3])
-                with a:
-                    if st.button("Use RTM", key="rtm_use", use_container_width=True):
-                        st.session_state.rtm_stage = "counter"
-                        st.rerun()
-                with b:
-                    if st.button("Skip RTM", key="rtm_skip", use_container_width=True):
-                        log_event(
-                            st.session_state.auction_id,
-                            "rtm_skipped",
-                            player=st.session_state.rtm_player["player_name"],
-                            old_team=st.session_state.rtm_old_team,
-                        )
-                        _finalize_sale(
-                            st.session_state.rtm_player,
-                            st.session_state.rtm_new_team,
-                            st.session_state.rtm_price,
-                            is_rtm=False,
-                        )
-                        st.session_state.rtm_stage = None
-                        st.session_state.set_index[current_set] += 1
-                        st.session_state.bid = 0
-                        st.session_state.current_bid_team = None
-                        st.rerun()
-
-            elif st.session_state.rtm_stage == "counter":
-                new_price = st.number_input(
-                    "Counter-bid price",
-                    min_value=int(st.session_state.rtm_price),
-                    value=int(st.session_state.rtm_price),
-                    step=1,
-                    key="rtm_counter_input",
-                )
-                if st.button("Submit counter", key="rtm_submit", type="primary"):
-                    st.session_state.rtm_counter_price = int(new_price)
-                    st.session_state.rtm_stage = "decision"
-                    st.rerun()
-
-            elif st.session_state.rtm_stage == "decision":
-                st.write(
-                    f"Counter-bid: **₹{st.session_state.rtm_counter_price}** — does "
-                    f"**{st.session_state.rtm_old_team}** accept?"
-                )
-                a, b, _ = st.columns([1, 1, 3])
-                with a:
-                    if st.button("Accept (new team wins)", key="rtm_accept", use_container_width=True):
-                        team = st.session_state.rtm_new_team
-                        price = st.session_state.rtm_counter_price
-                        if st.session_state.teams[team]["purse"] < price:
-                            st.error(f"{team} cannot afford this price!")
-                        else:
-                            _finalize_sale(st.session_state.rtm_player, team, price, is_rtm=False)
-                            st.session_state.rtm_stage = None
-                            st.session_state.set_index[current_set] += 1
-                            st.session_state.bid = 0
-                            st.session_state.current_bid_team = None
-                            st.rerun()
-                with b:
-                    if st.button("Reject (RTM wins)", key="rtm_reject", use_container_width=True):
-                        team = st.session_state.rtm_old_team
-                        price = st.session_state.rtm_counter_price
-                        if st.session_state.teams[team]["purse"] < price:
-                            st.error(f"{team} cannot afford RTM!")
-                        else:
-                            _finalize_sale(st.session_state.rtm_player, team, price, is_rtm=True)
-                            st.session_state.rtm_stage = None
-                            st.session_state.set_index[current_set] += 1
-                            st.session_state.bid = 0
-                            st.session_state.current_bid_team = None
-                            st.rerun()
 
     # ---------------- Team cards grid (RTM remaining is rendered inside each card) ----------------
     _render_teams_grid(active_team=st.session_state.current_bid_team)
