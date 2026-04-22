@@ -505,12 +505,9 @@ render_sidebar()
 AUTH_COOKIE = "nmtcc_auth"
 
 
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager(key="cookie_mgr")
-
-
-cookie_mgr = get_cookie_manager()
+# CookieManager is a widget — instantiate directly. The fixed key keeps
+# the component identity stable across reruns (no cache_resource needed).
+cookie_mgr = stx.CookieManager(key="cookie_mgr")
 
 
 # ---------------- SESSION STATE ----------------
