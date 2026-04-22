@@ -22,8 +22,11 @@ CREATE TABLE IF NOT EXISTS teams_master (
     name TEXT UNIQUE NOT NULL,
     captain TEXT,
     color TEXT NOT NULL,
+    text_color TEXT NOT NULL DEFAULT '#ffffff',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS text_color TEXT NOT NULL DEFAULT '#ffffff';
 
 CREATE TABLE IF NOT EXISTS auctions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -100,21 +103,24 @@ def init_schema() -> None:
 
 def list_master_teams():
     with get_cursor() as cur:
-        cur.execute("SELECT id, name, captain, color FROM teams_master ORDER BY name")
+        cur.execute("SELECT id, name, captain, color, text_color FROM teams_master ORDER BY name")
         return cur.fetchall()
 
 
 def get_master_team_by_name(name: str):
     with get_cursor() as cur:
-        cur.execute("SELECT id, name, captain, color FROM teams_master WHERE name = %s", (name,))
+        cur.execute(
+            "SELECT id, name, captain, color, text_color FROM teams_master WHERE name = %s",
+            (name,),
+        )
         return cur.fetchone()
 
 
-def create_master_team(name: str, captain: str, color: str) -> int:
+def create_master_team(name: str, captain: str, color: str, text_color: str) -> int:
     with get_cursor() as cur:
         cur.execute(
-            "INSERT INTO teams_master (name, captain, color) VALUES (%s, %s, %s) RETURNING id",
-            (name, captain, color),
+            "INSERT INTO teams_master (name, captain, color, text_color) VALUES (%s, %s, %s, %s) RETURNING id",
+            (name, captain, color, text_color),
         )
         return cur.fetchone()["id"]
 

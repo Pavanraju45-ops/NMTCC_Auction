@@ -1,4 +1,5 @@
 import random
+import urllib.parse
 from datetime import date, datetime, time
 from io import BytesIO
 
@@ -36,7 +37,24 @@ st.markdown(
     .purse-badge .value { font-size: 3rem; font-weight: 800; line-height: 1.1; }
     .team-chip {
         display: inline-block; padding: 0.4rem 0.9rem; border-radius: 999px;
-        color: white; font-weight: 600; margin: 0.2rem;
+        font-weight: 600; margin: 0.25rem 0.3rem 0.25rem 0;
+        text-decoration: none;
+        transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+    }
+    a.team-chip { cursor: pointer; }
+    a.team-chip:hover {
+        opacity: 0.9;
+        box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.6);
+        transform: translateY(-1px);
+    }
+    a.team-chip:hover .chip-x { opacity: 1; }
+    .chip-x {
+        margin-left: 0.5rem; font-weight: 700; opacity: 0.65;
+        border-left: 1px solid rgba(255,255,255,0.35); padding-left: 0.5rem;
+    }
+    .team-head {
+        display: inline-block; padding: 0.3rem 0.8rem; border-radius: 8px;
+        font-weight: 700; margin-bottom: 0.4rem;
     }
     .auction-id { font-family: monospace; font-size: 0.8rem; color: #888; }
     .stButton > button { border-radius: 8px; font-weight: 600; }
@@ -184,6 +202,15 @@ if st.session_state.page == "home":
 # SETUP — reordered: Tournament basics → Players → Teams
 # =========================================================
 elif st.session_state.page == "setup":
+    # Handle click-to-remove on team pills
+    if "remove_team" in st.query_params:
+        _rm = st.query_params["remove_team"]
+        st.session_state.setup_selected_teams = [
+            x for x in st.session_state.setup_selected_teams if x["name"] != _rm
+        ]
+        st.query_params.clear()
+        st.rerun()
+
     st.title("Auction Setup")
     st.caption(f"Signed in as **{st.session_state.admin_username}**")
 
@@ -257,7 +284,13 @@ elif st.session_state.page == "setup":
             else:
                 team = next(t for t in master_teams if t["name"] == to_add)
                 st.session_state.setup_selected_teams.append(
-                    {"id": team["id"], "name": team["name"], "captain": team["captain"], "color": team["color"]}
+                    {
+                        "id": team["id"],
+                        "name": team["name"],
+                        "captain": team["captain"],
+                        "color": team["color"],
+                        "text_color": team.get("text_color") or "#ffffff",
+                    }
                 )
                 st.rerun()
 
@@ -266,7 +299,17 @@ elif st.session_state.page == "setup":
             with st.form("new_team_form", clear_on_submit=True):
                 new_name = st.text_input("Team Name")
                 new_captain = st.text_input("Captain")
-                new_color = st.color_picker("Colour", value="#3b82f6")
+                c_bg, c_fg = st.columns(2)
+                with c_bg:
+                    new_color = st.color_picker("Background", value="#3b82f6")
+                with c_fg:
+                    new_text_color = st.color_picker("Text Colour", value="#ffffff")
+                st.markdown(
+                    f"<div style='padding:0.35rem 0.8rem; border-radius:8px; "
+                    f"background:{new_color}; color:{new_text_color}; text-align:center; font-weight:600;'>"
+                    f"Preview</div>",
+                    unsafe_allow_html=True,
+                )
                 submitted = st.form_submit_button("Save & Add")
                 if submitted:
                     nn = new_name.strip()
@@ -281,31 +324,36 @@ elif st.session_state.page == "setup":
                         if existing:
                             st.error(f"Team '{nn}' already exists in saved teams. Use the dropdown to add it.")
                         else:
-                            team_id = create_master_team(nn, new_captain.strip(), new_color)
+                            team_id = create_master_team(
+                                nn, new_captain.strip(), new_color, new_text_color
+                            )
                             st.session_state.setup_selected_teams.append(
-                                {"id": team_id, "name": nn, "captain": new_captain.strip(), "color": new_color}
+                                {
+                                    "id": team_id,
+                                    "name": nn,
+                                    "captain": new_captain.strip(),
+                                    "color": new_color,
+                                    "text_color": new_text_color,
+                                }
                             )
                             st.success(f"Added {nn}")
                             st.rerun()
 
-    # Selected teams display
+    # Selected teams display — click a chip to remove it
     if st.session_state.setup_selected_teams:
-        st.markdown("**Selected Teams**")
+        st.markdown("**Selected Teams** · _click a team to remove_")
         chips = "".join(
-            f"<span class='team-chip' style='background:{t['color']}'>{t['name']} · {t['captain'] or '—'}</span>"
+            f"<a class='team-chip' "
+            f"href='?remove_team={urllib.parse.quote(t['name'])}' "
+            f"target='_self' "
+            f"title='Click to remove {t['name']}' "
+            f"style='background:{t['color']}; color:{t.get('text_color', '#ffffff')};'>"
+            f"{t['name']} · {t['captain'] or '—'}"
+            f"<span class='chip-x'>✕</span>"
+            f"</a>"
             for t in st.session_state.setup_selected_teams
         )
         st.markdown(chips, unsafe_allow_html=True)
-
-        # Remove team controls
-        rem_cols = st.columns(min(len(st.session_state.setup_selected_teams), 5))
-        for i, t in enumerate(st.session_state.setup_selected_teams):
-            with rem_cols[i % 5]:
-                if st.button(f"✕ Remove {t['name']}", key=f"rm_{t['name']}"):
-                    st.session_state.setup_selected_teams = [
-                        x for x in st.session_state.setup_selected_teams if x["name"] != t["name"]
-                    ]
-                    st.rerun()
     else:
         st.caption("No teams added yet.")
 
@@ -354,6 +402,7 @@ elif st.session_state.page == "setup":
                         "team_id": t["id"],
                         "captain": t["captain"],
                         "color": t["color"],
+                        "text_color": t.get("text_color") or "#ffffff",
                         "purse": int(purse),
                         "players": [],
                         "rtm_remaining": int(rtm_count) if rtm_enabled else 0,
@@ -412,10 +461,10 @@ elif st.session_state.page == "auction":
         for i, (team, data) in enumerate(st.session_state.teams.items()):
             with rtm_cols[i]:
                 count = data["rtm_remaining"]
-                color = "#22c55e" if count > 0 else "#ef4444"
+                count_color = "#22c55e" if count > 0 else "#ef4444"
                 st.markdown(
-                    f"<h4 style='color:{data['color']}'>{team}</h4>"
-                    f"<h2 style='color:{color}'>{count}</h2>",
+                    f"<div class='team-head' style='background:{data['color']}; color:{data.get('text_color', '#ffffff')};'>{team}</div>"
+                    f"<h2 style='color:{count_color}'>{count}</h2>",
                     unsafe_allow_html=True,
                 )
 
@@ -586,7 +635,7 @@ elif st.session_state.page == "auction":
     for i, (team, data) in enumerate(st.session_state.teams.items()):
         with cols[i]:
             st.markdown(
-                f"<h4 style='color:{data['color']}'>{team}</h4>",
+                f"<div class='team-head' style='background:{data['color']}; color:{data.get('text_color', '#ffffff')};'>{team}</div>",
                 unsafe_allow_html=True,
             )
             st.write("Purse:", data["purse"])
@@ -634,7 +683,10 @@ elif st.session_state.page == "summary":
     st.markdown(f"<div class='auction-id'>Auction ID: {st.session_state.auction_id}</div>", unsafe_allow_html=True)
 
     for team, data in st.session_state.teams.items():
-        st.markdown(f"<h3 style='color:{data['color']}'>{team}</h3>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='team-head' style='background:{data['color']}; color:{data.get('text_color', '#ffffff')}; font-size:1.3rem;'>{team}</div>",
+            unsafe_allow_html=True,
+        )
         st.write("Remaining Purse:", data["purse"])
         st.dataframe(pd.DataFrame(data["players"]), use_container_width=True)
 
