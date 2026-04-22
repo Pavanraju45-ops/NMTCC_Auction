@@ -296,48 +296,53 @@ elif st.session_state.page == "setup":
 
     with t2:
         with st.popover("➕ Add new team"):
-            with st.form("new_team_form", clear_on_submit=True):
-                new_name = st.text_input("Team Name")
-                new_captain = st.text_input("Captain")
-                c_bg, c_fg = st.columns(2)
-                with c_bg:
-                    new_color = st.color_picker("Background", value="#3b82f6")
-                with c_fg:
-                    new_text_color = st.color_picker("Text Colour", value="#ffffff")
-                st.markdown(
-                    f"<div style='padding:0.35rem 0.8rem; border-radius:8px; "
-                    f"background:{new_color}; color:{new_text_color}; text-align:center; font-weight:600;'>"
-                    f"Preview</div>",
-                    unsafe_allow_html=True,
-                )
-                submitted = st.form_submit_button("Save & Add")
-                if submitted:
-                    nn = new_name.strip()
-                    if not nn:
-                        st.error("Team name required")
-                    elif len(st.session_state.setup_selected_teams) >= 15:
-                        st.error("Maximum 15 teams reached")
-                    elif nn.lower() in [n.lower() for n in selected_names]:
-                        st.error("Team already added to this auction")
+            # Plain widgets (not inside a form) so the preview updates live
+            new_name = st.text_input("Team Name", key="new_team_name")
+            new_captain = st.text_input("Captain", key="new_team_captain")
+            c_bg, c_fg = st.columns(2)
+            with c_bg:
+                new_color = st.color_picker("Background", value="#3b82f6", key="new_team_bg")
+            with c_fg:
+                new_text_color = st.color_picker("Text Colour", value="#ffffff", key="new_team_fg")
+
+            preview_label = (new_name.strip() or "Team") + " · " + (new_captain.strip() or "Captain")
+            st.markdown(
+                f"<div style='padding:0.5rem 1rem; border-radius:999px; display:inline-block; "
+                f"background:{new_color}; color:{new_text_color}; font-weight:600; margin:0.4rem 0;'>"
+                f"{preview_label}</div>",
+                unsafe_allow_html=True,
+            )
+
+            if st.button("Save & Add", key="new_team_save"):
+                nn = new_name.strip()
+                if not nn:
+                    st.error("Team name required")
+                elif len(st.session_state.setup_selected_teams) >= 15:
+                    st.error("Maximum 15 teams reached")
+                elif nn.lower() in [n.lower() for n in selected_names]:
+                    st.error("Team already added to this auction")
+                else:
+                    existing = get_master_team_by_name(nn)
+                    if existing:
+                        st.error(f"Team '{nn}' already exists in saved teams. Use the dropdown to add it.")
                     else:
-                        existing = get_master_team_by_name(nn)
-                        if existing:
-                            st.error(f"Team '{nn}' already exists in saved teams. Use the dropdown to add it.")
-                        else:
-                            team_id = create_master_team(
-                                nn, new_captain.strip(), new_color, new_text_color
-                            )
-                            st.session_state.setup_selected_teams.append(
-                                {
-                                    "id": team_id,
-                                    "name": nn,
-                                    "captain": new_captain.strip(),
-                                    "color": new_color,
-                                    "text_color": new_text_color,
-                                }
-                            )
-                            st.success(f"Added {nn}")
-                            st.rerun()
+                        team_id = create_master_team(
+                            nn, new_captain.strip(), new_color, new_text_color
+                        )
+                        st.session_state.setup_selected_teams.append(
+                            {
+                                "id": team_id,
+                                "name": nn,
+                                "captain": new_captain.strip(),
+                                "color": new_color,
+                                "text_color": new_text_color,
+                            }
+                        )
+                        # clear the form fields for the next entry
+                        for k in ("new_team_name", "new_team_captain"):
+                            if k in st.session_state:
+                                del st.session_state[k]
+                        st.rerun()
 
     # Selected teams display — click a chip to remove it
     if st.session_state.setup_selected_teams:
