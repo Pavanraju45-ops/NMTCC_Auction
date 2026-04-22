@@ -1,3 +1,4 @@
+import html
 import random
 import urllib.parse
 import uuid
@@ -59,6 +60,126 @@ st.markdown(
         font-weight: 700; margin-bottom: 0.4rem;
     }
     .auction-id { font-family: monospace; font-size: 0.8rem; color: #888; }
+
+    /* ---- Auction hero ---- */
+    .hero {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        color: white; padding: 1.8rem 2.2rem; border-radius: 18px;
+        margin: 0.5rem 0 1.2rem 0;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+    }
+    .hero-player-name { font-size: 2.4rem; font-weight: 800; margin: 0; line-height: 1.1; }
+    .hero-player-meta {
+        font-size: 0.95rem; opacity: 0.75; margin: 0.2rem 0 1rem 0;
+        letter-spacing: 1px;
+    }
+    .hero-bid-label {
+        font-size: 0.78rem; opacity: 0.6; text-transform: uppercase;
+        letter-spacing: 4px; text-align: center; margin: 0.2rem 0 0 0;
+    }
+    .hero-bid-value {
+        font-size: 4.2rem; font-weight: 800; text-align: center;
+        color: #fbbf24; line-height: 1.05; margin: 0 0 0.4rem 0;
+        text-shadow: 0 0 32px rgba(251, 191, 36, 0.45);
+    }
+    .hero-bidder {
+        text-align: center; font-size: 0.95rem; opacity: 0.85;
+        margin: 0 0 0.8rem 0;
+    }
+    .hero-bidder b { color: #fbbf24; }
+
+    /* ---- Progress strip ---- */
+    .progress-strip {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.7rem 1.2rem; background: #f8fafc;
+        border-radius: 10px; margin-bottom: 0.8rem; font-size: 0.9rem;
+        color: #475569;
+    }
+    .progress-strip b { color: #0f172a; }
+
+    /* ---- RTM strip ---- */
+    .rtm-strip {
+        display: flex; gap: 0.6rem; flex-wrap: wrap;
+        padding: 0.9rem 1.1rem; background: #fef3c7;
+        border: 1px solid #fcd34d; border-radius: 12px;
+        margin-bottom: 1.1rem;
+    }
+    .rtm-item {
+        display: flex; align-items: center; gap: 0.55rem;
+        padding: 0.3rem 0.55rem 0.3rem 0.75rem;
+        background: white; border-radius: 999px;
+        font-weight: 600; font-size: 0.88rem;
+    }
+    .rtm-team-dot {
+        width: 10px; height: 10px; border-radius: 50%;
+    }
+    .rtm-count {
+        min-width: 1.6rem; text-align: center; padding: 0.1rem 0.5rem;
+        border-radius: 999px; font-weight: 700; color: white;
+        font-size: 0.85rem;
+    }
+    .rtm-count.has { background: #22c55e; }
+    .rtm-count.none { background: #ef4444; }
+
+    /* ---- Team cards ---- */
+    .team-card {
+        border: 2px solid #e5e7eb;
+        border-radius: 14px;
+        background: white;
+        overflow: hidden;
+        margin-bottom: 1rem;
+        transition: transform 0.15s, box-shadow 0.2s, border-color 0.2s;
+    }
+    .team-card.active {
+        border-color: #fbbf24;
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.4), 0 8px 24px rgba(0,0,0,0.08);
+        transform: translateY(-2px);
+    }
+    .team-card-header { padding: 0.85rem 1rem; }
+    .team-card-title { font-size: 1.15rem; font-weight: 800; line-height: 1.1; }
+    .team-card-captain { font-size: 0.8rem; opacity: 0.85; margin-top: 0.15rem; }
+    .team-card-body { padding: 0.9rem 1rem 1rem 1rem; }
+    .purse-row {
+        display: flex; justify-content: space-between; align-items: flex-start;
+        gap: 0.5rem;
+    }
+    .micro-label {
+        font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1.5px;
+        color: #94a3b8; font-weight: 700;
+    }
+    .team-purse { font-size: 1.8rem; font-weight: 800; color: #065f46; line-height: 1.1; }
+    .team-squad { font-size: 1.3rem; font-weight: 700; color: #1e293b; line-height: 1.1; text-align: right; }
+    .team-squad .squad-hint { font-size: 0.7rem; color: #64748b; font-weight: 500; display: block; letter-spacing: 0.5px; }
+    .progress-bar {
+        width: 100%; height: 7px; background: #e5e7eb; border-radius: 999px;
+        margin: 0.7rem 0 0.8rem 0; overflow: hidden;
+    }
+    .progress-bar-fill {
+        height: 100%; background: linear-gradient(90deg, #10b981, #14b8a6);
+        border-radius: 999px; transition: width 0.3s;
+    }
+    .progress-bar-fill.over { background: linear-gradient(90deg, #8b5cf6, #6366f1); }
+    .player-list {
+        max-height: 240px; overflow-y: auto; font-size: 0.88rem;
+        border-top: 1px solid #f3f4f6; padding-top: 0.2rem;
+    }
+    .player-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.35rem 0.1rem; border-bottom: 1px solid #f3f4f6;
+    }
+    .player-row:last-child { border-bottom: none; }
+    .player-cell-name { color: #334155; }
+    .player-cell-price { font-weight: 700; color: #059669; }
+    .player-cell-price.rtm { color: #7c3aed; }
+    .rtm-tag {
+        font-size: 0.65rem; background: #ede9fe; color: #6d28d9;
+        padding: 0.05rem 0.4rem; border-radius: 4px; margin-left: 0.4rem;
+        font-weight: 700; letter-spacing: 0.5px;
+    }
+    .empty-squad {
+        text-align: center; padding: 1.1rem 0.5rem; color: #94a3b8;
+        font-style: italic; font-size: 0.85rem;
+    }
     .stButton > button { border-radius: 8px; font-weight: 600; }
     </style>
     """,
@@ -497,33 +618,92 @@ elif st.session_state.page == "setup":
 # AUCTION
 # =========================================================
 elif st.session_state.page == "auction":
-    # Purse badge at top, prominent
-    aid = st.session_state.auction_id
-    st.markdown(
-        f"""
-        <div class='purse-badge'>
-          <div class='label'>Auction Purse</div>
-          <div class='value'>{st.session_state.purse}</div>
-        </div>
-        <div style='text-align:center;' class='auction-id'>Auction ID: {aid}</div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # ---------------- Helpers ----------------
+    def _render_team_card(name: str, data: dict, is_active: bool, min_players: int) -> str:
+        bought = len(data["players"])
+        pct = min(100, int(round(100 * bought / max(1, min_players))))
+        over = bought > min_players
+        safe_name = html.escape(name)
+        safe_cap = html.escape(data.get("captain") or "—")
+        bg = data["color"]
+        fg = data.get("text_color") or "#ffffff"
 
-    if st.session_state.rtm_enabled:
-        st.subheader("RTM Remaining")
-        rtm_cols = st.columns(len(st.session_state.teams))
-        for i, (team, data) in enumerate(st.session_state.teams.items()):
-            with rtm_cols[i]:
-                count = data["rtm_remaining"]
-                count_color = "#22c55e" if count > 0 else "#ef4444"
-                st.markdown(
-                    f"<div class='team-head' style='background:{data['color']}; color:{data.get('text_color', '#ffffff')};'>{team}</div>"
-                    f"<h2 style='color:{count_color}'>{count}</h2>",
-                    unsafe_allow_html=True,
+        if data["players"]:
+            rows = []
+            for p in data["players"]:
+                tag = "<span class='rtm-tag'>RTM</span>" if p.get("is_rtm") else ""
+                rows.append(
+                    f"<div class='player-row'>"
+                    f"<div class='player-cell-name'>{html.escape(str(p['player']))}{tag}</div>"
+                    f"<div class='player-cell-price{' rtm' if p.get('is_rtm') else ''}'>₹{p['sold']}</div>"
+                    f"</div>"
                 )
+            player_html = f"<div class='player-list'>{''.join(rows)}</div>"
+        else:
+            player_html = "<div class='empty-squad'>No players yet</div>"
 
-    # Walk to next player
+        min_hint = f"min {min_players}" if not over else f"+{bought - min_players} over min"
+
+        return (
+            f"<div class='team-card{' active' if is_active else ''}'>"
+            f"<div class='team-card-header' style='background:{bg}; color:{fg};'>"
+            f"<div class='team-card-title'>{safe_name}</div>"
+            f"<div class='team-card-captain'>Captain: {safe_cap}</div>"
+            f"</div>"
+            f"<div class='team-card-body'>"
+            f"<div class='purse-row'>"
+            f"<div><div class='micro-label'>Purse</div><div class='team-purse'>₹{data['purse']}</div></div>"
+            f"<div><div class='micro-label' style='text-align:right;'>Squad</div>"
+            f"<div class='team-squad'>{bought}/{min_players}"
+            f"<span class='squad-hint'>{min_hint}</span></div></div>"
+            f"</div>"
+            f"<div class='progress-bar'>"
+            f"<div class='progress-bar-fill{' over' if over else ''}' style='width:{pct}%'></div>"
+            f"</div>"
+            f"{player_html}"
+            f"</div>"
+            f"</div>"
+        )
+
+    def _render_teams_grid(active_team: str | None):
+        teams_items = list(st.session_state.teams.items())
+        n = len(teams_items)
+        cols_per_row = 3 if n <= 9 else 4 if n <= 12 else 5
+        min_players = int(st.session_state.players_per_team)
+
+        for row_start in range(0, n, cols_per_row):
+            row = teams_items[row_start:row_start + cols_per_row]
+            cols = st.columns(cols_per_row)
+            for i, (name, data) in enumerate(row):
+                with cols[i]:
+                    st.markdown(
+                        _render_team_card(name, data, name == active_team, min_players),
+                        unsafe_allow_html=True,
+                    )
+
+    def _finalize_sale(player_obj, team_name: str, price: int, is_rtm: bool):
+        td = st.session_state.teams[team_name]
+        td["players"].append(
+            {
+                "player": player_obj["player_name"],
+                "base": player_obj["base_price"],
+                "sold": price,
+                "is_rtm": is_rtm,
+            }
+        )
+        td["purse"] -= price
+        if is_rtm:
+            td["rtm_remaining"] -= 1
+        enqueue(
+            record_sale,
+            st.session_state.auction_id,
+            player_obj["player_name"],
+            td["team_id"],
+            price,
+            is_rtm=is_rtm,
+        )
+
+    # ---------------- Walk to next unsold player ----------------
     while st.session_state.current_set_idx < len(st.session_state.set_order):
         current_set = st.session_state.set_order[st.session_state.current_set_idx]
         idx = st.session_state.set_index[current_set]
@@ -538,168 +718,221 @@ elif st.session_state.page == "auction":
         st.session_state.page = "trade"
         st.rerun()
 
-    st.subheader(player["player_name"])
-    st.write("Set:", current_set, " | Base Price:", player["base_price"])
+    # Fresh player → start bid at base price
+    base_price = int(player["base_price"])
+    if st.session_state.bid < base_price:
+        st.session_state.bid = base_price
 
-    last_team = "NA"
-    if st.session_state.rtm_enabled:
-        last_team = st.selectbox("Previous Team", ["NA"] + list(st.session_state.teams.keys()))
+    # ---------------- Progress strip ----------------
+    total_players = sum(len(ps) for ps in st.session_state.set_players.values())
+    sold_players = sum(len(t["players"]) for t in st.session_state.teams.values())
+    st.markdown(
+        f"<div class='progress-strip'>"
+        f"<div>Set: <b>{html.escape(str(current_set))}</b></div>"
+        f"<div>Progress: <b>{sold_players}/{total_players}</b> players sold</div>"
+        f"<div class='auction-id'>Auction: {st.session_state.auction_id[:8]}…</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-    st.write("Current Bid:", st.session_state.bid)
+    # ---------------- HERO: current player + bid + controls ----------------
+    bid_team_current = st.session_state.current_bid_team or "—"
+    st.markdown(
+        f"""
+        <div class='hero'>
+          <div class='hero-player-name'>{html.escape(str(player['player_name']))}</div>
+          <div class='hero-player-meta'>Set: {html.escape(str(current_set))} · Base: ₹{base_price}</div>
+          <div class='hero-bid-label'>Current Bid</div>
+          <div class='hero-bid-value'>₹{st.session_state.bid}</div>
+          <div class='hero-bidder'>Top bidder: <b>{html.escape(str(bid_team_current))}</b></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    valid_teams = [
-        t for t, d in st.session_state.teams.items() if d["purse"] >= st.session_state.bid
-    ]
+    # Bid controls: quick increments + custom input + reset
+    quick_cols = st.columns([1, 1, 1, 1, 2, 1])
+    increments = [1, 2, 5, 10]
+    for i, inc in enumerate(increments):
+        with quick_cols[i]:
+            if st.button(f"+{inc}", key=f"inc_{inc}", use_container_width=True):
+                st.session_state.bid += inc
+                st.rerun()
+    with quick_cols[4]:
+        custom = st.number_input(
+            "Set bid",
+            min_value=base_price,
+            value=st.session_state.bid,
+            step=1,
+            key="custom_bid_input",
+            label_visibility="collapsed",
+        )
+        if custom != st.session_state.bid:
+            st.session_state.bid = int(custom)
+    with quick_cols[5]:
+        if st.button("↺ Base", key="reset_bid", use_container_width=True, help="Reset to base price"):
+            st.session_state.bid = base_price
+            st.rerun()
+
+    # Team selectors + sell
+    sell_cols = st.columns([2, 2, 2])
+    valid_teams = [t for t, d in st.session_state.teams.items() if d["purse"] >= st.session_state.bid]
     if not valid_teams:
-        st.error("No team can afford this player. Reduce bid.")
+        st.error("No team can afford this bid. Reduce bid.")
         st.stop()
 
-    bid_team = st.selectbox("Bidding Team", valid_teams)
-    st.session_state.current_bid_team = bid_team
+    with sell_cols[0]:
+        bid_team = st.selectbox("Bidding Team", valid_teams, key="bid_team_select")
+        st.session_state.current_bid_team = bid_team
+    with sell_cols[1]:
+        if st.session_state.rtm_enabled:
+            last_team = st.selectbox(
+                "Previous team (RTM eligible)",
+                ["NA"] + list(st.session_state.teams.keys()),
+                key="last_team_select",
+            )
+        else:
+            last_team = "NA"
+            st.caption("RTM disabled for this auction")
+    with sell_cols[2]:
+        st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+        sell_clicked = st.button(
+            f"✅ SELL to {bid_team} @ ₹{st.session_state.bid}",
+            type="primary",
+            use_container_width=True,
+            disabled=st.session_state.rtm_stage is not None,
+        )
 
-    if st.button("Increase Bid"):
-        st.session_state.bid += 2 if st.session_state.bid < 15 else 5
-        st.rerun()
-
-    if st.button("Sell Player", type="primary"):
+    if sell_clicked:
         final_team = st.session_state.current_bid_team
         price = st.session_state.bid
-
         if st.session_state.teams[final_team]["purse"] < price:
             st.error(f"{final_team} does not have enough purse!")
+        elif (
+            st.session_state.rtm_enabled
+            and last_team != "NA"
+            and last_team != final_team
+            and st.session_state.teams[last_team]["rtm_remaining"] > 0
+        ):
+            st.session_state.rtm_stage = "ask"
+            st.session_state.rtm_player = player
+            st.session_state.rtm_price = price
+            st.session_state.rtm_new_team = final_team
+            st.session_state.rtm_old_team = last_team
+            st.rerun()
         else:
-            if st.session_state.rtm_enabled and last_team != "NA":
-                if st.session_state.teams[last_team]["rtm_remaining"] > 0:
-                    st.session_state.rtm_stage = "ask"
-                    st.session_state.rtm_player = player
-                    st.session_state.rtm_price = price
-                    st.session_state.rtm_new_team = final_team
-                    st.session_state.rtm_old_team = last_team
+            _finalize_sale(player, final_team, price, is_rtm=False)
+            st.session_state.set_index[current_set] += 1
+            st.session_state.bid = 0
+            st.rerun()
+
+    # ---------------- RTM inline panel ----------------
+    if st.session_state.rtm_stage is not None:
+        with st.container(border=True):
+            st.markdown(
+                f"**🔁 RTM — {st.session_state.rtm_old_team}** can match **{st.session_state.rtm_new_team}**'s "
+                f"bid of **₹{st.session_state.rtm_price}** for **{st.session_state.rtm_player['player_name']}**."
+            )
+
+            if st.session_state.rtm_stage == "ask":
+                a, b, _ = st.columns([1, 1, 3])
+                with a:
+                    if st.button("Use RTM", key="rtm_use", use_container_width=True):
+                        st.session_state.rtm_stage = "counter"
+                        st.rerun()
+                with b:
+                    if st.button("Skip RTM", key="rtm_skip", use_container_width=True):
+                        _finalize_sale(
+                            st.session_state.rtm_player,
+                            st.session_state.rtm_new_team,
+                            st.session_state.rtm_price,
+                            is_rtm=False,
+                        )
+                        st.session_state.rtm_stage = None
+                        st.session_state.set_index[current_set] += 1
+                        st.session_state.bid = 0
+                        st.rerun()
+
+            elif st.session_state.rtm_stage == "counter":
+                new_price = st.number_input(
+                    "Counter-bid price",
+                    min_value=int(st.session_state.rtm_price),
+                    value=int(st.session_state.rtm_price),
+                    step=1,
+                    key="rtm_counter_input",
+                )
+                if st.button("Submit counter", key="rtm_submit", type="primary"):
+                    st.session_state.rtm_counter_price = int(new_price)
+                    st.session_state.rtm_stage = "decision"
                     st.rerun()
 
-            # NORMAL SALE
-            td = st.session_state.teams[final_team]
-            td["players"].append(
-                {"player": player["player_name"], "base": player["base_price"], "sold": price}
-            )
-            td["purse"] -= price
-            enqueue(
-                record_sale,
-                st.session_state.auction_id,
-                player["player_name"],
-                td["team_id"],
-                price,
-                is_rtm=False,
-            )
-            st.session_state.set_index[current_set] += 1
-            st.session_state.bid = 5
-            st.rerun()
-
-    # RTM FLOW
-    if st.session_state.rtm_stage == "ask":
-        st.warning(f"{st.session_state.rtm_old_team} can use RTM")
-        if st.button("Use RTM"):
-            st.session_state.rtm_stage = "counter"
-            st.rerun()
-        if st.button("Skip RTM"):
-            new_team = st.session_state.rtm_new_team
-            price = st.session_state.rtm_price
-            td = st.session_state.teams[new_team]
-            td["players"].append(
-                {
-                    "player": st.session_state.rtm_player["player_name"],
-                    "base": st.session_state.rtm_player["base_price"],
-                    "sold": price,
-                }
-            )
-            td["purse"] -= price
-            enqueue(
-                record_sale,
-                st.session_state.auction_id,
-                st.session_state.rtm_player["player_name"],
-                td["team_id"],
-                price,
-                is_rtm=False,
-            )
-            st.session_state.rtm_stage = None
-            st.session_state.set_index[current_set] += 1
-            st.session_state.bid = 5
-            st.rerun()
-
-    elif st.session_state.rtm_stage == "counter":
-        new_price = st.number_input("Enter RTM Price", min_value=st.session_state.rtm_price)
-        if st.button("Submit Price"):
-            st.session_state.rtm_counter_price = new_price
-            st.session_state.rtm_stage = "decision"
-            st.rerun()
-
-    elif st.session_state.rtm_stage == "decision":
-        if st.button("Accept"):
-            team = st.session_state.rtm_new_team
-            price = st.session_state.rtm_counter_price
-            td = st.session_state.teams[team]
-            if td["purse"] < price:
-                st.error(f"{team} cannot afford this RTM price!")
-            else:
-                td["players"].append(
-                    {
-                        "player": st.session_state.rtm_player["player_name"],
-                        "base": st.session_state.rtm_player["base_price"],
-                        "sold": price,
-                    }
+            elif st.session_state.rtm_stage == "decision":
+                st.write(
+                    f"Counter-bid: **₹{st.session_state.rtm_counter_price}** — does "
+                    f"**{st.session_state.rtm_old_team}** accept?"
                 )
-                td["purse"] -= price
-                enqueue(
-                    record_sale,
-                    st.session_state.auction_id,
-                    st.session_state.rtm_player["player_name"],
-                    td["team_id"],
-                    price,
-                    is_rtm=False,
-                )
-                st.session_state.rtm_stage = None
-                st.session_state.set_index[current_set] += 1
-                st.session_state.bid = 5
-                st.rerun()
-        if st.button("Reject"):
-            team = st.session_state.rtm_old_team
-            price = st.session_state.rtm_counter_price
-            td = st.session_state.teams[team]
-            if td["purse"] < price:
-                st.error(f"{team} cannot afford RTM!")
-            else:
-                td["players"].append(
-                    {
-                        "player": st.session_state.rtm_player["player_name"],
-                        "base": st.session_state.rtm_player["base_price"],
-                        "sold": price,
-                    }
-                )
-                td["purse"] -= price
-                td["rtm_remaining"] -= 1
-                enqueue(
-                    record_sale,
-                    st.session_state.auction_id,
-                    st.session_state.rtm_player["player_name"],
-                    td["team_id"],
-                    price,
-                    is_rtm=True,
-                )
-                st.session_state.rtm_stage = None
-                st.session_state.set_index[current_set] += 1
-                st.session_state.bid = 5
-                st.rerun()
+                a, b, _ = st.columns([1, 1, 3])
+                with a:
+                    if st.button("Accept (new team wins)", key="rtm_accept", use_container_width=True):
+                        team = st.session_state.rtm_new_team
+                        price = st.session_state.rtm_counter_price
+                        if st.session_state.teams[team]["purse"] < price:
+                            st.error(f"{team} cannot afford this price!")
+                        else:
+                            _finalize_sale(st.session_state.rtm_player, team, price, is_rtm=False)
+                            st.session_state.rtm_stage = None
+                            st.session_state.set_index[current_set] += 1
+                            st.session_state.bid = 0
+                            st.rerun()
+                with b:
+                    if st.button("Reject (RTM wins)", key="rtm_reject", use_container_width=True):
+                        team = st.session_state.rtm_old_team
+                        price = st.session_state.rtm_counter_price
+                        if st.session_state.teams[team]["purse"] < price:
+                            st.error(f"{team} cannot afford RTM!")
+                        else:
+                            _finalize_sale(st.session_state.rtm_player, team, price, is_rtm=True)
+                            st.session_state.rtm_stage = None
+                            st.session_state.set_index[current_set] += 1
+                            st.session_state.bid = 0
+                            st.rerun()
 
+    # ---------------- RTM remaining strip ----------------
+    if st.session_state.rtm_enabled:
+        pills = []
+        for tname, tdata in st.session_state.teams.items():
+            cnt = tdata["rtm_remaining"]
+            has = "has" if cnt > 0 else "none"
+            pills.append(
+                f"<div class='rtm-item'>"
+                f"<span class='rtm-team-dot' style='background:{tdata['color']};'></span>"
+                f"<span>{html.escape(tname)}</span>"
+                f"<span class='rtm-count {has}'>{cnt}</span>"
+                f"</div>"
+            )
+        st.markdown(
+            f"<div class='rtm-strip'><div class='micro-label' "
+            f"style='color:#92400e; align-self:center; margin-right:0.4rem;'>RTM remaining</div>"
+            f"{''.join(pills)}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ---------------- Team cards grid ----------------
+    _render_teams_grid(active_team=st.session_state.current_bid_team)
+
+    # Finish-early escape hatch
     st.divider()
-    cols = st.columns(len(st.session_state.teams))
-    for i, (team, data) in enumerate(st.session_state.teams.items()):
-        with cols[i]:
-            st.markdown(
-                f"<div class='team-head' style='background:{data['color']}; color:{data.get('text_color', '#ffffff')};'>{team}</div>",
-                unsafe_allow_html=True,
-            )
-            st.write("Purse:", data["purse"])
-            st.dataframe(pd.DataFrame(data["players"]), use_container_width=True)
+    c1, c2, _ = st.columns([1, 1, 3])
+    with c1:
+        if st.button("Finish auction now", key="finish_auction"):
+            enqueue(update_auction_status, st.session_state.auction_id, "completed")
+            invalidate_auctions_cache()
+            st.session_state.page = "trade"
+            st.rerun()
+    with c2:
+        if st.button("Back to Home", key="auction_home"):
+            st.session_state.page = "home"
+            st.rerun()
 
 
 # =========================================================
