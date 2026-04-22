@@ -1252,15 +1252,6 @@ elif st.session_state.page == "teams":
 # SETUP — reordered: Tournament basics → Players → Teams
 # =========================================================
 elif st.session_state.page == "setup":
-    # Handle click-to-remove on team pills
-    if "remove_team" in st.query_params:
-        _rm = st.query_params["remove_team"]
-        st.session_state.setup_selected_teams = [
-            x for x in st.session_state.setup_selected_teams if x["name"] != _rm
-        ]
-        st.query_params.clear()
-        st.rerun()
-
     st.title("Auction Setup")
     st.caption(f"Signed in as **{st.session_state.admin_username}**")
 
@@ -1454,21 +1445,50 @@ elif st.session_state.page == "setup":
                                 del st.session_state[k]
                         st.rerun()
 
-    # Selected teams display — click a chip to remove it
+    # Selected teams display — click a chip to remove it.
+    # Use real st.button elements so we don't trigger a full page nav;
+    # style each button with the team's colors via .st-key-<key> CSS.
     if st.session_state.setup_selected_teams:
         st.markdown("**Selected Teams** · _click a team to remove_")
-        chips = "".join(
-            f"<a class='team-chip' "
-            f"href='?remove_team={urllib.parse.quote(t['name'])}' "
-            f"target='_self' "
-            f"title='Click to remove {t['name']}' "
-            f"style='background:{t['color']}; color:{t.get('text_color', '#ffffff')};'>"
-            f"{t['name']} · {t['captain'] or '—'}"
-            f"<span class='chip-x'>✕</span>"
-            f"</a>"
-            for t in st.session_state.setup_selected_teams
-        )
-        st.markdown(chips, unsafe_allow_html=True)
+
+        sel_css: list[str] = []
+        for i, t in enumerate(st.session_state.setup_selected_teams):
+            bg = t["color"]
+            fg = t.get("text_color") or "#ffffff"
+            sel_css.append(
+                f".st-key-rm_team_{i} button {{"
+                f"  background: {bg} !important; color: {fg} !important;"
+                f"  border: 2px solid {bg} !important; font-weight: 700 !important;"
+                f"  border-radius: 999px !important; padding: 0.35rem 0.95rem !important;"
+                f"}}"
+                f".st-key-rm_team_{i} button:hover {{"
+                f"  filter: brightness(1.05);"
+                f"  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.6);"
+                f"}}"
+            )
+        st.markdown(f"<style>{''.join(sel_css)}</style>", unsafe_allow_html=True)
+
+        # Up to 6 chips per row
+        teams_list = list(st.session_state.setup_selected_teams)
+        per_row = 6
+        for row_start in range(0, len(teams_list), per_row):
+            row_chips = teams_list[row_start:row_start + per_row]
+            btn_cols = st.columns(per_row)
+            for j, t in enumerate(row_chips):
+                i = row_start + j
+                with btn_cols[j]:
+                    label = f"{t['name']} · {t['captain'] or '—'}  ✕"
+                    if st.button(
+                        label,
+                        key=f"rm_team_{i}",
+                        use_container_width=True,
+                        help=f"Click to remove {t['name']}",
+                    ):
+                        st.session_state.setup_selected_teams = [
+                            x for x in st.session_state.setup_selected_teams
+                            if x["name"] != t["name"]
+                        ]
+                        st.rerun()
     else:
         st.caption("No teams added yet.")
 
