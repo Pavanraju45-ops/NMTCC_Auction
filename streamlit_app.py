@@ -327,7 +327,7 @@ elif st.session_state.page == "auction":
             st.dataframe(pd.DataFrame(data["players"]), height=200)
 
 # =========================================================
-# TRADE
+# TRADE WINDOW
 # =========================================================
 elif st.session_state.page == "trade":
 
@@ -344,6 +344,25 @@ elif st.session_state.page == "trade":
     with col2:
         t2 = st.selectbox("Team 2", teams)
         st.dataframe(pd.DataFrame(st.session_state.teams[t2]["players"]))
+
+    p1 = st.selectbox("Player Team 1", [p["player"] for p in st.session_state.teams[t1]["players"]])
+    p2 = st.selectbox("Player Team 2", [p["player"] for p in st.session_state.teams[t2]["players"]])
+
+    if st.button("Execute Trade"):
+
+        team1 = st.session_state.teams[t1]["players"]
+        team2 = st.session_state.teams[t2]["players"]
+
+        player1 = next(p for p in team1 if p["player"] == p1)
+        player2 = next(p for p in team2 if p["player"] == p2)
+
+        team1.remove(player1)
+        team2.remove(player2)
+
+        team1.append(player2)
+        team2.append(player1)
+
+        st.success("Trade Completed")
 
     if st.button("Finish Trade"):
         st.session_state.page = "summary"
