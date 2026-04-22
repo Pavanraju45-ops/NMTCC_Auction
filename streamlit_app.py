@@ -8,7 +8,16 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
-from auth import check_admin, create_admin, has_any_admin
+import extra_streamlit_components as stx
+
+from auth import (
+    check_admin,
+    create_admin,
+    create_session,
+    delete_session,
+    has_any_admin,
+    lookup_session,
+)
 from db import (
     add_auction_players,
     add_auction_team,
@@ -463,8 +472,13 @@ def render_sidebar():
         if st.session_state.get("authenticated"):
             st.caption(f"Signed in as **{st.session_state.admin_username}**")
             if st.button("Log out", key="logout_sidebar", use_container_width=True):
+                tok = st.session_state.get("session_token")
+                if tok:
+                    delete_session(tok)
+                    cookie_mgr.delete(AUTH_COOKIE)
                 st.session_state.authenticated = False
                 st.session_state.admin_username = None
+                st.session_state.session_token = None
                 st.rerun()
             st.divider()
 
@@ -487,10 +501,23 @@ def render_sidebar():
 render_sidebar()
 
 
+# ---------------- Cookie manager (persistent auth) ----------------
+AUTH_COOKIE = "nmtcc_auth"
+
+
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager(key="cookie_mgr")
+
+
+cookie_mgr = get_cookie_manager()
+
+
 # ---------------- SESSION STATE ----------------
 defaults = {
     "authenticated": False,
     "admin_username": None,
+    "session_token": None,
     "page": "home",
     # Auction runtime
     "auction_id": None,
@@ -535,6 +562,17 @@ for k, v in defaults.items():
 # =========================================================
 # AUTH GATE
 # =========================================================
+# Restore session from cookie if present + valid
+if not st.session_state.authenticated:
+    existing_token = cookie_mgr.get(AUTH_COOKIE)
+    if existing_token:
+        _user = lookup_session(existing_token)
+        if _user:
+            st.session_state.authenticated = True
+            st.session_state.admin_username = _user
+            st.session_state.session_token = existing_token
+
+
 def render_auth():
     st.markdown("<h1 class='hero-title'>🏏 NMTCC AUCTION</h1>", unsafe_allow_html=True)
     st.markdown("<p class='hero-sub'>Admin Sign-in Required</p>", unsafe_allow_html=True)
@@ -568,8 +606,15 @@ def render_auth():
                 submitted = st.form_submit_button("Log in", use_container_width=True)
                 if submitted:
                     if check_admin(u, p):
+                        token, expires_at = create_session(u)
                         st.session_state.authenticated = True
                         st.session_state.admin_username = u
+                        st.session_state.session_token = token
+                        cookie_mgr.set(
+                            AUTH_COOKIE,
+                            token,
+                            expires_at=expires_at,
+                        )
                         st.rerun()
                     else:
                         st.error("Invalid username or password")

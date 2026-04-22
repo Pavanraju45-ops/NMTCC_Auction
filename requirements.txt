@@ -5,3 +5,4 @@ psycopg2-binary
 bcrypt
 python-dotenv
 Pillow
+extra-streamlit-components
