@@ -144,6 +144,31 @@ def create_master_team(name: str, captain: str, color: str, text_color: str) -> 
         return cur.fetchone()["id"]
 
 
+def update_master_team(team_id: int, name: str, captain: str, color: str, text_color: str) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE teams_master SET name = %s, captain = %s, color = %s, text_color = %s WHERE id = %s",
+            (name, captain, color, text_color, team_id),
+        )
+
+
+def get_team_auctions(team_id: int):
+    """Auctions this team participated in, newest first."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.id, a.name, a.auction_datetime, a.status,
+                   at.remaining_purse, at.rtm_remaining
+            FROM auction_teams at
+            JOIN auctions a ON a.id = at.auction_id
+            WHERE at.team_id = %s
+            ORDER BY a.auction_datetime DESC
+            """,
+            (team_id,),
+        )
+        return cur.fetchall()
+
+
 # ---------- auctions ----------
 
 def create_auction(

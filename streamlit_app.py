@@ -19,12 +19,14 @@ from db import (
     get_auction_results_detailed,
     get_auction_teams_full,
     get_master_team_by_name,
+    get_team_auctions,
     init_schema,
     list_auctions,
     list_master_teams,
     record_sale,
     update_auction_status,
     update_bid_tiers,
+    update_master_team,
 )
 from event_log import log_event, read_events
 from sync_queue import enqueue, stats as sync_stats
@@ -250,6 +252,7 @@ st.markdown(
         text-align: center;
         box-shadow: 0 18px 60px rgba(0,0,0,0.35), 0 0 0 6px rgba(255,255,255,0.08);
         position: relative; overflow: hidden;
+        margin-bottom: 1.2rem;
     }
     .sold-card::before {
         content: ''; position: absolute; inset: 0;
@@ -323,12 +326,21 @@ def cached_recent_auctions():
     return list_auctions()
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def cached_team_auctions(team_id: int):
+    return get_team_auctions(team_id)
+
+
 def invalidate_master_teams_cache():
     cached_master_teams.clear()
 
 
 def invalidate_auctions_cache():
     cached_recent_auctions.clear()
+
+
+def invalidate_team_auctions_cache():
+    cached_team_auctions.clear()
 
 
 def _load_auction_from_db(auction_id: str) -> dict:
@@ -574,6 +586,10 @@ if st.session_state.page == "home":
             st.session_state.page = "setup"
             st.rerun()
 
+        if st.button("🧑‍🤝‍🧑 Manage Teams", use_container_width=True):
+            st.session_state.page = "teams"
+            st.rerun()
+
         st.markdown("&nbsp;", unsafe_allow_html=True)
 
         with st.expander("📋 Past Auctions", expanded=False):
@@ -613,6 +629,149 @@ if st.session_state.page == "home":
                         else:
                             st.caption(f"_{status}_")
                     st.divider()
+
+
+# =========================================================
+# TEAMS — master team management (edit + auction history)
+# =========================================================
+elif st.session_state.page == "teams":
+    top_l, top_r = st.columns([5, 1])
+    with top_l:
+        st.title("Teams")
+        st.caption("Edit saved teams and jump to any auction they've played.")
+    with top_r:
+        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        if st.button("← Home", key="teams_back_home", use_container_width=True):
+            st.session_state.page = "home"
+            st.rerun()
+
+    teams = cached_master_teams()
+    if not teams:
+        st.info("No saved teams yet. Teams are saved when you add them during auction setup.")
+    else:
+        for t in teams:
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([4, 1, 1])
+                with c1:
+                    fg = t.get("text_color") or "#ffffff"
+                    st.markdown(
+                        f"<div style='display:flex; align-items:center; gap:0.9rem;'>"
+                        f"<div style='width:46px; height:46px; border-radius:10px; "
+                        f"background:{t['color']}; color:{fg}; display:flex; "
+                        f"align-items:center; justify-content:center; font-weight:800;'>"
+                        f"{html.escape(t['name'][:1].upper())}</div>"
+                        f"<div><div style='font-size:1.15rem; font-weight:700;'>"
+                        f"{html.escape(t['name'])}</div>"
+                        f"<div style='color:#64748b; font-size:0.88rem;'>"
+                        f"Captain: {html.escape(t.get('captain') or '—')}</div></div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    with st.popover("⚙️ Edit", use_container_width=True):
+                        # Edit form (plain widgets so colour preview updates live)
+                        new_name = st.text_input(
+                            "Team Name",
+                            value=t["name"],
+                            key=f"edit_name_{t['id']}",
+                        )
+                        new_cap = st.text_input(
+                            "Captain",
+                            value=t.get("captain") or "",
+                            key=f"edit_cap_{t['id']}",
+                        )
+                        bg_col, fg_col = st.columns(2)
+                        with bg_col:
+                            new_bg = st.color_picker(
+                                "Background",
+                                value=t["color"],
+                                key=f"edit_bg_{t['id']}",
+                            )
+                        with fg_col:
+                            new_fg = st.color_picker(
+                                "Text",
+                                value=t.get("text_color") or "#ffffff",
+                                key=f"edit_fg_{t['id']}",
+                            )
+                        preview_label = (
+                            (new_name.strip() or "Team")
+                            + " · "
+                            + (new_cap.strip() or "Captain")
+                        )
+                        st.markdown(
+                            f"<div style='padding:0.5rem 1rem; border-radius:999px; "
+                            f"background:{new_bg}; color:{new_fg}; text-align:center; "
+                            f"font-weight:600; display:inline-block; margin:0.4rem 0;'>"
+                            f"{html.escape(preview_label)}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        if st.button(
+                            "Save",
+                            key=f"edit_save_{t['id']}",
+                            use_container_width=True,
+                            type="primary",
+                        ):
+                            nn = new_name.strip()
+                            if not nn:
+                                st.error("Team name required")
+                            else:
+                                existing = get_master_team_by_name(nn)
+                                if existing and existing["id"] != t["id"]:
+                                    st.error(f"Another team already named '{nn}'")
+                                else:
+                                    update_master_team(
+                                        t["id"], nn, new_cap.strip(), new_bg, new_fg
+                                    )
+                                    invalidate_master_teams_cache()
+                                    st.success("Updated")
+                                    st.rerun()
+                with c3:
+                    st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
+
+                with st.expander(f"📊 Auctions this team played in"):
+                    auc_list = cached_team_auctions(t["id"])
+                    if not auc_list:
+                        st.caption("Not in any auctions yet.")
+                    else:
+                        for a in auc_list:
+                            aid = str(a["id"])
+                            dt = (
+                                a["auction_datetime"].strftime("%Y-%m-%d %H:%M")
+                                if a.get("auction_datetime")
+                                else ""
+                            )
+                            name = a["name"] or "(unnamed)"
+                            row_l, row_r = st.columns([4, 1])
+                            with row_l:
+                                st.markdown(
+                                    f"**{html.escape(name)}** — {dt} · "
+                                    f"`{a['status']}` · purse left ₹{a['remaining_purse']}"
+                                    f"<br><span class='auction-id'>ID: {aid}</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            with row_r:
+                                if a["status"] == "active":
+                                    if st.button(
+                                        "▶ Resume",
+                                        key=f"t{t['id']}_resume_{aid}",
+                                        use_container_width=True,
+                                    ):
+                                        try:
+                                            resume_auction(aid)
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Could not resume: {e}")
+                                elif a["status"] == "completed":
+                                    if st.button(
+                                        "📊 Report",
+                                        key=f"t{t['id']}_report_{aid}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state.report_auction_id = aid
+                                        st.session_state.page = "report"
+                                        st.rerun()
+                                else:
+                                    st.caption(f"_{a['status']}_")
 
 
 # =========================================================
@@ -699,30 +858,40 @@ elif st.session_state.page == "setup":
     master_names = [t["name"] for t in master_teams]
     selected_names = [t["name"] for t in st.session_state.setup_selected_teams]
 
+    def _on_saved_team_pick():
+        picked = st.session_state.get("add_saved_team")
+        if not picked:
+            return
+        if len(st.session_state.setup_selected_teams) >= 15:
+            return
+        if any(x["name"] == picked for x in st.session_state.setup_selected_teams):
+            st.session_state.add_saved_team = None
+            return
+        team = next((t for t in master_teams if t["name"] == picked), None)
+        if not team:
+            return
+        st.session_state.setup_selected_teams.append(
+            {
+                "id": team["id"],
+                "name": team["name"],
+                "captain": team["captain"],
+                "color": team["color"],
+                "text_color": team.get("text_color") or "#ffffff",
+            }
+        )
+        # Reset the selectbox so it returns to the placeholder
+        st.session_state.add_saved_team = None
+
     t1, t2 = st.columns([3, 2])
     with t1:
-        to_add = st.selectbox(
+        st.selectbox(
             "Add saved team",
             options=[n for n in master_names if n not in selected_names],
             index=None,
             placeholder="Select a saved team...",
             key="add_saved_team",
+            on_change=_on_saved_team_pick,
         )
-        if st.button("➕ Add saved team", disabled=to_add is None):
-            if len(st.session_state.setup_selected_teams) >= 15:
-                st.error("Maximum 15 teams reached")
-            else:
-                team = next(t for t in master_teams if t["name"] == to_add)
-                st.session_state.setup_selected_teams.append(
-                    {
-                        "id": team["id"],
-                        "name": team["name"],
-                        "captain": team["captain"],
-                        "color": team["color"],
-                        "text_color": team.get("text_color") or "#ffffff",
-                    }
-                )
-                st.rerun()
 
     with t2:
         with st.popover("➕ Add new team"):
