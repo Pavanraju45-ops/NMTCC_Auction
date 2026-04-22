@@ -24,8 +24,25 @@ from db import (
     list_master_teams,
     record_sale,
     update_auction_status,
+    update_bid_tiers,
 )
+from event_log import log_event, read_events
 from sync_queue import enqueue, stats as sync_stats
+
+
+# ---------------- Bid ladder ----------------
+DEFAULT_BID_TIERS = [
+    {"up_to": 15, "step": 2},
+    {"up_to": 40, "step": 5},
+    {"up_to": 10000, "step": 10},  # effectively unbounded
+]
+
+
+def step_for_bid(current_bid: int, tiers: list[dict]) -> int:
+    for tier in tiers:
+        if current_bid < int(tier["up_to"]):
+            return int(tier["step"])
+    return int(tiers[-1]["step"])
 
 st.set_page_config(page_title="NMTCC Auction", layout="wide", page_icon="🏏")
 
@@ -33,6 +50,10 @@ st.set_page_config(page_title="NMTCC Auction", layout="wide", page_icon="🏏")
 st.markdown(
     """
     <style>
+    /* Tighter top padding — default is ~6rem of whitespace. */
+    .block-container { padding-top: 1.4rem !important; padding-bottom: 2rem !important; }
+    header[data-testid="stHeader"] { height: 0; visibility: hidden; }
+
     .hero-title { font-size: 3.2rem; font-weight: 800; text-align: center; margin: 0; letter-spacing: 2px; }
     .hero-sub { font-size: 1.2rem; text-align: center; color: #888; margin-top: 0.3rem; margin-bottom: 1.2rem; }
     .purse-badge {
@@ -184,6 +205,54 @@ st.markdown(
         text-align: center; padding: 1.1rem 0.5rem; color: #94a3b8;
         font-style: italic; font-size: 0.85rem;
     }
+    .rtm-pill {
+        display: inline-flex; align-items: center; gap: 0.35rem;
+        padding: 0.1rem 0.55rem; border-radius: 999px;
+        font-weight: 700; font-size: 0.72rem; letter-spacing: 1px;
+        background: rgba(255,255,255,0.18); backdrop-filter: blur(4px);
+    }
+    .rtm-pill.none { opacity: 0.55; }
+
+    /* ---- Per-team bid buttons ---- */
+    .team-bid-btn {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0.65rem 0.9rem; border-radius: 10px;
+        font-weight: 700; text-decoration: none;
+        margin-bottom: 0.45rem;
+        transition: transform 0.1s, box-shadow 0.18s, opacity 0.15s;
+        border: 2px solid transparent;
+    }
+    .team-bid-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.22); }
+    .team-bid-btn.active { border-color: #fbbf24; box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.35); }
+    .team-bid-btn.disabled { opacity: 0.35; pointer-events: none; }
+    .team-bid-btn-name { font-size: 0.95rem; }
+    .team-bid-btn-amt { font-size: 1.05rem; }
+    .team-bid-btn-step { font-size: 0.7rem; opacity: 0.8; margin-right: 0.35rem; }
+
+    /* ---- Timeline ---- */
+    .timeline { max-height: 460px; overflow-y: auto; padding-right: 0.5rem; }
+    .tl-item {
+        display: flex; gap: 0.65rem; padding: 0.5rem 0.4rem;
+        border-bottom: 1px solid #f1f5f9; font-size: 0.88rem;
+    }
+    .tl-item:last-child { border: none; }
+    .tl-icon {
+        font-size: 1.05rem; width: 1.5rem; text-align: center; flex-shrink: 0;
+    }
+    .tl-body { flex: 1; color: #334155; }
+    .tl-ts { font-size: 0.72rem; color: #94a3b8; font-variant-numeric: tabular-nums; }
+    .tl-body b { color: #0f172a; }
+
+    /* Compact, prominent bid amount in the hero's right column */
+    .bid-now {
+        display: flex; flex-direction: column; align-items: center;
+        padding: 1.4rem 1rem; background: linear-gradient(135deg,#1e293b,#0f172a);
+        border-radius: 16px; color: white; margin-bottom: 0.8rem;
+    }
+    .bid-now .label { font-size: 0.7rem; letter-spacing: 4px; opacity: 0.6; text-transform: uppercase; }
+    .bid-now .amount { font-size: 3.2rem; font-weight: 800; color: #fbbf24; line-height: 1.05; }
+    .bid-now .bidder { font-size: 0.88rem; opacity: 0.85; }
+    .bid-now .bidder b { color: #fbbf24; }
     .stButton > button { border-radius: 8px; font-weight: 600; }
     </style>
     """,
@@ -296,6 +365,7 @@ def resume_auction(auction_id: str) -> None:
     st.session_state.purse = int(a["purse"])
     st.session_state.rtm_enabled = bool(a["rtm_enabled"])
     st.session_state.rtm_count = int(a["rtm_count"])
+    st.session_state.bid_tiers = a.get("bid_tiers") or DEFAULT_BID_TIERS
     st.session_state.set_order = snap["set_order"]
     st.session_state.set_players = snap["set_players"]
     st.session_state.set_index = snap["set_index"]
@@ -312,10 +382,18 @@ def resume_auction(auction_id: str) -> None:
     st.session_state.page = "auction"
 
 
-# ---------------- Sync queue status (sidebar) ----------------
-def render_sync_sidebar():
+# ---------------- Sidebar: sync + session ----------------
+def render_sidebar():
     s = sync_stats()
     with st.sidebar:
+        if st.session_state.get("authenticated"):
+            st.caption(f"Signed in as **{st.session_state.admin_username}**")
+            if st.button("Log out", key="logout_sidebar", use_container_width=True):
+                st.session_state.authenticated = False
+                st.session_state.admin_username = None
+                st.rerun()
+            st.divider()
+
         st.markdown("### DB Sync")
         backlog = s["backlog"]
         if backlog == 0:
@@ -328,11 +406,11 @@ def render_sync_sidebar():
         )
         if s["last_error"]:
             st.caption(f"last error: {s['last_error']}")
-        if st.button("Refresh status", key="refresh_sync"):
+        if st.button("Refresh status", key="refresh_sync", use_container_width=True):
             st.rerun()
 
 
-render_sync_sidebar()
+render_sidebar()
 
 
 # ---------------- SESSION STATE ----------------
@@ -364,6 +442,10 @@ defaults = {
     "setup_selected_teams": [],  # list of dicts {name, captain, color, id (or None)}
     # Report
     "report_auction_id": None,
+    # Bid ladder for the currently running auction
+    "bid_tiers": None,
+    # Dedup flag so we only emit new_player once per distinct player
+    "last_logged_player": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -416,15 +498,6 @@ def render_auth():
 if not st.session_state.authenticated:
     render_auth()
     st.stop()
-
-
-# Header with logout
-top_l, top_r = st.columns([6, 1])
-with top_r:
-    if st.button("Log out"):
-        st.session_state.authenticated = False
-        st.session_state.admin_username = None
-        st.rerun()
 
 
 # =========================================================
@@ -522,6 +595,19 @@ elif st.session_state.page == "setup":
         rtm_count = st.number_input(
             "RTMs per Team", 0, 5, 2, disabled=not rtm_enabled
         )
+
+    st.markdown("**Bid ladder** — how much each successive bid raises")
+    l1, l2, l3, l4, l5 = st.columns([1, 1, 1, 1, 1])
+    with l1:
+        t1_up = st.number_input("Tier 1: below ₹", 1, 500, 15, key="ladder_t1_up")
+    with l2:
+        t1_step = st.number_input("step ₹", 1, 100, 2, key="ladder_t1_step")
+    with l3:
+        t2_up = st.number_input("Tier 2: below ₹", 1, 1000, 40, key="ladder_t2_up")
+    with l4:
+        t2_step = st.number_input("step ₹", 1, 100, 5, key="ladder_t2_step")
+    with l5:
+        final_step = st.number_input("Tier 3: step ₹", 1, 100, 10, key="ladder_t3_step")
 
     st.divider()
 
@@ -677,6 +763,12 @@ elif st.session_state.page == "setup":
                 dt = datetime.combine(auction_date, auction_time)
                 auction_id = str(uuid.uuid4())
 
+                bid_tiers_cfg = [
+                    {"up_to": int(t1_up), "step": int(t1_step)},
+                    {"up_to": int(t2_up), "step": int(t2_step)},
+                    {"up_to": 10000, "step": int(final_step)},
+                ]
+
                 # Async: UI proceeds immediately; daemon thread syncs to Postgres.
                 enqueue(
                     create_auction,
@@ -687,6 +779,7 @@ elif st.session_state.page == "setup":
                     purse=int(purse),
                     rtm_enabled=bool(rtm_enabled),
                     rtm_count=int(rtm_count) if rtm_enabled else 0,
+                    bid_tiers=bid_tiers_cfg,
                 )
 
                 teams_state = {}
@@ -735,6 +828,7 @@ elif st.session_state.page == "setup":
                 st.session_state.purse = int(purse)
                 st.session_state.rtm_enabled = bool(rtm_enabled)
                 st.session_state.rtm_count = int(rtm_count) if rtm_enabled else 0
+                st.session_state.bid_tiers = bid_tiers_cfg
                 st.session_state.bid = 0
 
                 st.session_state.set_order = set_order
@@ -753,8 +847,12 @@ elif st.session_state.page == "setup":
 # AUCTION
 # =========================================================
 elif st.session_state.page == "auction":
+    # Ensure bid tiers are present even for auctions created before this feature
+    if not st.session_state.bid_tiers:
+        st.session_state.bid_tiers = DEFAULT_BID_TIERS
+
     # ---------------- Helpers ----------------
-    def _render_team_card(name: str, data: dict, is_active: bool, min_players: int) -> str:
+    def _render_team_card(name: str, data: dict, is_active: bool, min_players: int, rtm_enabled: bool) -> str:
         bought = len(data["players"])
         pct = min(100, int(round(100 * bought / max(1, min_players))))
         over = bought > min_players
@@ -779,11 +877,20 @@ elif st.session_state.page == "auction":
 
         min_hint = f"min {min_players}" if not over else f"+{bought - min_players} over min"
 
+        rtm_html = ""
+        if rtm_enabled:
+            cnt = int(data.get("rtm_remaining", 0))
+            cls = "rtm-pill" if cnt > 0 else "rtm-pill none"
+            rtm_html = f"<div class='{cls}' style='margin-top:0.35rem;'>RTM × {cnt}</div>"
+
         return (
             f"<div class='team-card{' active' if is_active else ''}'>"
             f"<div class='team-card-header' style='background:{bg}; color:{fg};'>"
-            f"<div class='team-card-title'>{safe_name}</div>"
-            f"<div class='team-card-captain'>Captain: {safe_cap}</div>"
+            f"<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem;'>"
+            f"<div><div class='team-card-title'>{safe_name}</div>"
+            f"<div class='team-card-captain'>Captain: {safe_cap}</div></div>"
+            f"{rtm_html}"
+            f"</div>"
             f"</div>"
             f"<div class='team-card-body'>"
             f"<div class='purse-row'>"
@@ -800,11 +907,12 @@ elif st.session_state.page == "auction":
             f"</div>"
         )
 
-    def _render_teams_grid(active_team: str | None):
+    def _render_teams_grid(active_team):
         teams_items = list(st.session_state.teams.items())
         n = len(teams_items)
         cols_per_row = 3 if n <= 9 else 4 if n <= 12 else 5
         min_players = int(st.session_state.players_per_team)
+        rtm_on = bool(st.session_state.rtm_enabled)
 
         for row_start in range(0, n, cols_per_row):
             row = teams_items[row_start:row_start + cols_per_row]
@@ -812,7 +920,7 @@ elif st.session_state.page == "auction":
             for i, (name, data) in enumerate(row):
                 with cols[i]:
                     st.markdown(
-                        _render_team_card(name, data, name == active_team, min_players),
+                        _render_team_card(name, data, name == active_team, min_players, rtm_on),
                         unsafe_allow_html=True,
                     )
 
@@ -837,6 +945,39 @@ elif st.session_state.page == "auction":
             price,
             is_rtm=is_rtm,
         )
+        log_event(
+            st.session_state.auction_id,
+            "sell" if not is_rtm else "rtm_used",
+            player=player_obj["player_name"],
+            team=team_name,
+            amount=int(price),
+        )
+
+    # ---------------- Query-param action: a team placed a bid ----------------
+    if "bid_team" in st.query_params:
+        pending_team = st.query_params.get("bid_team")
+        st.query_params.clear()
+        if pending_team in st.session_state.teams:
+            # Use the ladder to determine the next bid amount.
+            tiers = st.session_state.bid_tiers or DEFAULT_BID_TIERS
+            if st.session_state.current_bid_team is None:
+                # First bidder accepts the current display (base)
+                new_bid = int(st.session_state.bid)
+            else:
+                step = step_for_bid(int(st.session_state.bid), tiers)
+                new_bid = int(st.session_state.bid) + step
+            if st.session_state.teams[pending_team]["purse"] >= new_bid:
+                st.session_state.bid = new_bid
+                st.session_state.current_bid_team = pending_team
+                log_event(
+                    st.session_state.auction_id,
+                    "bid",
+                    team=pending_team,
+                    amount=new_bid,
+                )
+                st.rerun()
+            else:
+                st.warning(f"{pending_team} cannot afford ₹{new_bid}")
 
     # ---------------- Walk to next unsold player ----------------
     while st.session_state.current_set_idx < len(st.session_state.set_order):
@@ -850,11 +991,23 @@ elif st.session_state.page == "auction":
     else:
         enqueue(update_auction_status, st.session_state.auction_id, "completed")
         invalidate_auctions_cache()
+        log_event(st.session_state.auction_id, "auction_over")
         st.session_state.page = "trade"
         st.rerun()
 
-    # Fresh player → start bid at base price
+    # Fresh player → start bid at base price + reset top bidder
     base_price = int(player["base_price"])
+    if st.session_state.last_logged_player != player["player_name"]:
+        st.session_state.bid = base_price
+        st.session_state.current_bid_team = None
+        st.session_state.last_logged_player = player["player_name"]
+        log_event(
+            st.session_state.auction_id,
+            "new_player",
+            player=player["player_name"],
+            set=str(current_set),
+            base=base_price,
+        )
     if st.session_state.bid < base_price:
         st.session_state.bid = base_price
 
@@ -870,77 +1023,142 @@ elif st.session_state.page == "auction":
         unsafe_allow_html=True,
     )
 
-    # ---------------- HERO: current player + bid + controls ----------------
+    # ---------------- Hero (left) + Controls (right) ----------------
+    tiers = st.session_state.bid_tiers or DEFAULT_BID_TIERS
+    next_step = step_for_bid(int(st.session_state.bid), tiers)
     bid_team_current = st.session_state.current_bid_team or "—"
-    st.markdown(
-        f"""
-        <div class='hero'>
-          <div class='hero-player-name'>{html.escape(str(player['player_name']))}</div>
-          <div class='hero-player-meta'>Set: {html.escape(str(current_set))} · Base: ₹{base_price}</div>
-          <div class='hero-bid-label'>Current Bid</div>
-          <div class='hero-bid-value'>₹{st.session_state.bid}</div>
-          <div class='hero-bidder'>Top bidder: <b>{html.escape(str(bid_team_current))}</b></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
-    # Bid controls: quick increments + custom input + reset
-    quick_cols = st.columns([1, 1, 1, 1, 2, 1])
-    increments = [1, 2, 5, 10]
-    for i, inc in enumerate(increments):
-        with quick_cols[i]:
-            if st.button(f"+{inc}", key=f"inc_{inc}", use_container_width=True):
-                st.session_state.bid += inc
+    left, right = st.columns([1, 1], gap="medium")
+
+    with left:
+        st.markdown(
+            f"""
+            <div class='hero'>
+              <div class='hero-player-name'>{html.escape(str(player['player_name']))}</div>
+              <div class='hero-player-meta'>Set: {html.escape(str(current_set))} · Base: ₹{base_price}</div>
+              <div class='hero-bid-label'>Current Bid</div>
+              <div class='hero-bid-value'>₹{st.session_state.bid}</div>
+              <div class='hero-bidder'>Top bidder: <b>{html.escape(str(bid_team_current))}</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        # Header row: next-step indicator + quick actions
+        r1, r2, r3 = st.columns([2, 1, 1])
+        with r1:
+            ladder_parts = [f"<{t['up_to']}→+{t['step']}" for t in tiers]
+            ladder_str = "; ".join(ladder_parts)
+            st.caption(f"Next bid step: **+₹{next_step}** (ladder: {ladder_str})")
+        with r2:
+            if st.button("↺ Base", key="reset_bid", use_container_width=True, help="Reset bid and top bidder"):
+                st.session_state.bid = base_price
+                st.session_state.current_bid_team = None
                 st.rerun()
-    with quick_cols[4]:
-        custom = st.number_input(
-            "Set bid",
-            min_value=base_price,
-            value=st.session_state.bid,
-            step=1,
-            key="custom_bid_input",
-            label_visibility="collapsed",
-        )
-        if custom != st.session_state.bid:
-            st.session_state.bid = int(custom)
-    with quick_cols[5]:
-        if st.button("↺ Base", key="reset_bid", use_container_width=True, help="Reset to base price"):
-            st.session_state.bid = base_price
-            st.rerun()
-
-    # Team selectors + sell
-    sell_cols = st.columns([2, 2, 2])
-    valid_teams = [t for t, d in st.session_state.teams.items() if d["purse"] >= st.session_state.bid]
-    if not valid_teams:
-        st.error("No team can afford this bid. Reduce bid.")
-        st.stop()
-
-    with sell_cols[0]:
-        bid_team = st.selectbox("Bidding Team", valid_teams, key="bid_team_select")
-        st.session_state.current_bid_team = bid_team
-    with sell_cols[1]:
-        if st.session_state.rtm_enabled:
-            last_team = st.selectbox(
-                "Previous team (RTM eligible)",
-                ["NA"] + list(st.session_state.teams.keys()),
-                key="last_team_select",
+        with r3:
+            custom = st.number_input(
+                "Set ₹",
+                min_value=base_price,
+                value=int(st.session_state.bid),
+                step=1,
+                key="custom_bid_input",
+                label_visibility="collapsed",
             )
-        else:
-            last_team = "NA"
-            st.caption("RTM disabled for this auction")
-    with sell_cols[2]:
-        st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
-        sell_clicked = st.button(
-            f"✅ SELL to {bid_team} @ ₹{st.session_state.bid}",
-            type="primary",
-            use_container_width=True,
-            disabled=st.session_state.rtm_stage is not None,
-        )
+            if int(custom) != int(st.session_state.bid):
+                st.session_state.bid = int(custom)
 
+        # Per-team bid buttons, 2 columns wide
+        st.markdown(
+            "<div class='micro-label' style='margin:0.4rem 0 0.3rem 0;'>Tap a team to bid</div>",
+            unsafe_allow_html=True,
+        )
+        team_items = list(st.session_state.teams.items())
+        btn_cols = st.columns(2)
+        for i, (tname, tdata) in enumerate(team_items):
+            col = btn_cols[i % 2]
+            with col:
+                if st.session_state.current_bid_team is None:
+                    preview_next = int(st.session_state.bid)
+                else:
+                    preview_next = int(st.session_state.bid) + step_for_bid(int(st.session_state.bid), tiers)
+                can_afford = tdata["purse"] >= preview_next
+                is_active = (tname == st.session_state.current_bid_team)
+                classes = "team-bid-btn"
+                if is_active:
+                    classes += " active"
+                if not can_afford:
+                    classes += " disabled"
+                href = f"?bid_team={urllib.parse.quote(tname)}" if can_afford else "#"
+                bg = tdata["color"]
+                fg = tdata.get("text_color") or "#ffffff"
+                st.markdown(
+                    f"<a class='{classes}' href='{href}' target='_self' "
+                    f"style='background:{bg}; color:{fg};'>"
+                    f"<span class='team-bid-btn-name'>{html.escape(tname)}</span>"
+                    f"<span class='team-bid-btn-amt'>₹{preview_next}</span>"
+                    f"</a>",
+                    unsafe_allow_html=True,
+                )
+
+        # RTM "previous team" + SELL
+        sell_cols = st.columns([2, 2])
+        with sell_cols[0]:
+            if st.session_state.rtm_enabled:
+                last_team = st.selectbox(
+                    "Previous team (RTM eligible)",
+                    ["NA"] + list(st.session_state.teams.keys()),
+                    key="last_team_select",
+                )
+            else:
+                last_team = "NA"
+                st.caption("RTM disabled")
+        with sell_cols[1]:
+            st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
+            sell_disabled = (
+                st.session_state.rtm_stage is not None
+                or st.session_state.current_bid_team is None
+            )
+            sell_label = (
+                f"✅ SELL to {st.session_state.current_bid_team} @ ₹{st.session_state.bid}"
+                if st.session_state.current_bid_team
+                else "Pick a bidding team"
+            )
+            sell_clicked = st.button(
+                sell_label,
+                type="primary",
+                use_container_width=True,
+                disabled=sell_disabled,
+            )
+
+        # Bid-ladder editor (editable mid-auction)
+        with st.expander("⚙️ Bid ladder", expanded=False):
+            l1, l2, l3, l4, l5 = st.columns(5)
+            with l1:
+                nt1_up = st.number_input("T1 below ₹", 1, 500, int(tiers[0]["up_to"]), key="auc_t1_up")
+            with l2:
+                nt1_step = st.number_input("step ₹", 1, 100, int(tiers[0]["step"]), key="auc_t1_step")
+            with l3:
+                nt2_up = st.number_input("T2 below ₹", 1, 1000, int(tiers[1]["up_to"]), key="auc_t2_up")
+            with l4:
+                nt2_step = st.number_input("step ₹", 1, 100, int(tiers[1]["step"]), key="auc_t2_step")
+            with l5:
+                nt3_step = st.number_input("T3 step ₹", 1, 100, int(tiers[-1]["step"]), key="auc_t3_step")
+            if st.button("Save ladder", key="save_ladder"):
+                new_tiers = [
+                    {"up_to": int(nt1_up), "step": int(nt1_step)},
+                    {"up_to": int(nt2_up), "step": int(nt2_step)},
+                    {"up_to": 10000, "step": int(nt3_step)},
+                ]
+                st.session_state.bid_tiers = new_tiers
+                enqueue(update_bid_tiers, st.session_state.auction_id, new_tiers)
+                st.success("Ladder updated")
+                st.rerun()
+
+    # ---------------- Sell action (outside the columns) ----------------
     if sell_clicked:
         final_team = st.session_state.current_bid_team
-        price = st.session_state.bid
+        price = int(st.session_state.bid)
         if st.session_state.teams[final_team]["purse"] < price:
             st.error(f"{final_team} does not have enough purse!")
         elif (
@@ -954,11 +1172,20 @@ elif st.session_state.page == "auction":
             st.session_state.rtm_price = price
             st.session_state.rtm_new_team = final_team
             st.session_state.rtm_old_team = last_team
+            log_event(
+                st.session_state.auction_id,
+                "rtm_triggered",
+                player=player["player_name"],
+                new_team=final_team,
+                old_team=last_team,
+                amount=price,
+            )
             st.rerun()
         else:
             _finalize_sale(player, final_team, price, is_rtm=False)
             st.session_state.set_index[current_set] += 1
             st.session_state.bid = 0
+            st.session_state.current_bid_team = None
             st.rerun()
 
     # ---------------- RTM inline panel ----------------
@@ -977,6 +1204,12 @@ elif st.session_state.page == "auction":
                         st.rerun()
                 with b:
                     if st.button("Skip RTM", key="rtm_skip", use_container_width=True):
+                        log_event(
+                            st.session_state.auction_id,
+                            "rtm_skipped",
+                            player=st.session_state.rtm_player["player_name"],
+                            old_team=st.session_state.rtm_old_team,
+                        )
                         _finalize_sale(
                             st.session_state.rtm_player,
                             st.session_state.rtm_new_team,
@@ -986,6 +1219,7 @@ elif st.session_state.page == "auction":
                         st.session_state.rtm_stage = None
                         st.session_state.set_index[current_set] += 1
                         st.session_state.bid = 0
+                        st.session_state.current_bid_team = None
                         st.rerun()
 
             elif st.session_state.rtm_stage == "counter":
@@ -1018,6 +1252,7 @@ elif st.session_state.page == "auction":
                             st.session_state.rtm_stage = None
                             st.session_state.set_index[current_set] += 1
                             st.session_state.bid = 0
+                            st.session_state.current_bid_team = None
                             st.rerun()
                 with b:
                     if st.button("Reject (RTM wins)", key="rtm_reject", use_container_width=True):
@@ -1030,38 +1265,61 @@ elif st.session_state.page == "auction":
                             st.session_state.rtm_stage = None
                             st.session_state.set_index[current_set] += 1
                             st.session_state.bid = 0
+                            st.session_state.current_bid_team = None
                             st.rerun()
 
-    # ---------------- RTM remaining strip ----------------
-    if st.session_state.rtm_enabled:
-        pills = []
-        for tname, tdata in st.session_state.teams.items():
-            cnt = tdata["rtm_remaining"]
-            has = "has" if cnt > 0 else "none"
-            pills.append(
-                f"<div class='rtm-item'>"
-                f"<span class='rtm-team-dot' style='background:{tdata['color']};'></span>"
-                f"<span>{html.escape(tname)}</span>"
-                f"<span class='rtm-count {has}'>{cnt}</span>"
-                f"</div>"
-            )
-        st.markdown(
-            f"<div class='rtm-strip'><div class='micro-label' "
-            f"style='color:#92400e; align-self:center; margin-right:0.4rem;'>RTM remaining</div>"
-            f"{''.join(pills)}</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ---------------- Team cards grid ----------------
+    # ---------------- Team cards grid (RTM remaining is rendered inside each card) ----------------
     _render_teams_grid(active_team=st.session_state.current_bid_team)
 
+    # ---------------- Timeline panel ----------------
+    with st.expander("⏱ Event timeline", expanded=False):
+        events = read_events(st.session_state.auction_id)
+        if not events:
+            st.caption("No events yet.")
+        else:
+            icons = {
+                "bid": "📈", "sell": "💰", "rtm_triggered": "🔁", "rtm_used": "🔁",
+                "rtm_skipped": "⏭", "new_player": "🆕", "trade_proposed": "🤝",
+                "trade_accepted": "✅", "trade_rejected": "❌", "auction_over": "🏁",
+            }
+            rows = []
+            for ev in reversed(events):
+                ic = icons.get(ev["type"], "•")
+                ts = ev.get("ts", "")[11:19]
+                etype = ev["type"]
+                if etype == "bid":
+                    body = f"<b>{html.escape(ev.get('team',''))}</b> bid <b>₹{ev.get('amount','')}</b>"
+                elif etype == "sell":
+                    body = f"Sold <b>{html.escape(ev.get('player',''))}</b> to <b>{html.escape(ev.get('team',''))}</b> for <b>₹{ev.get('amount','')}</b>"
+                elif etype == "rtm_used":
+                    body = f"<b>{html.escape(ev.get('team',''))}</b> used RTM on <b>{html.escape(ev.get('player',''))}</b> (₹{ev.get('amount','')})"
+                elif etype == "rtm_triggered":
+                    body = f"RTM offered to <b>{html.escape(ev.get('old_team',''))}</b> against <b>{html.escape(ev.get('new_team',''))}</b> on <b>{html.escape(ev.get('player',''))}</b> @ ₹{ev.get('amount','')}"
+                elif etype == "rtm_skipped":
+                    body = f"<b>{html.escape(ev.get('old_team',''))}</b> skipped RTM on <b>{html.escape(ev.get('player',''))}</b>"
+                elif etype == "new_player":
+                    body = f"New player: <b>{html.escape(ev.get('player',''))}</b> (set {html.escape(str(ev.get('set','')))}, base ₹{ev.get('base','')})"
+                elif etype in ("trade_proposed", "trade_accepted", "trade_rejected"):
+                    body = f"Trade {etype.split('_')[1]}: <b>{html.escape(ev.get('team_a',''))}</b> ↔ <b>{html.escape(ev.get('team_b',''))}</b>"
+                elif etype == "auction_over":
+                    body = "Auction completed"
+                else:
+                    body = html.escape(str(ev))
+                rows.append(
+                    f"<div class='tl-item'>"
+                    f"<div class='tl-icon'>{ic}</div>"
+                    f"<div class='tl-body'>{body}<div class='tl-ts'>{ts}</div></div>"
+                    f"</div>"
+                )
+            st.markdown(f"<div class='timeline'>{''.join(rows)}</div>", unsafe_allow_html=True)
+
     # Finish-early escape hatch
-    st.divider()
     c1, c2, _ = st.columns([1, 1, 3])
     with c1:
         if st.button("Finish auction now", key="finish_auction"):
             enqueue(update_auction_status, st.session_state.auction_id, "completed")
             invalidate_auctions_cache()
+            log_event(st.session_state.auction_id, "auction_over")
             st.session_state.page = "trade"
             st.rerun()
     with c2:
@@ -1087,16 +1345,39 @@ elif st.session_state.page == "trade":
     p1 = st.selectbox("Player Team 1", [p["player"] for p in st.session_state.teams[t1]["players"]])
     p2 = st.selectbox("Player Team 2", [p["player"] for p in st.session_state.teams[t2]["players"]])
 
-    if st.button("Execute Trade"):
-        team1 = st.session_state.teams[t1]["players"]
-        team2 = st.session_state.teams[t2]["players"]
-        player1 = next(p for p in team1 if p["player"] == p1)
-        player2 = next(p for p in team2 if p["player"] == p2)
-        team1.remove(player1)
-        team2.remove(player2)
-        team1.append(player2)
-        team2.append(player1)
-        st.success("Trade Completed")
+    trade_cols = st.columns(3)
+    with trade_cols[0]:
+        if st.button("Propose Trade", key="trade_propose"):
+            log_event(
+                st.session_state.auction_id,
+                "trade_proposed",
+                team_a=t1, team_b=t2, player_a=p1, player_b=p2,
+            )
+            st.info(f"Proposed: {p1} ↔ {p2}")
+    with trade_cols[1]:
+        if st.button("Accept Trade", key="trade_accept", type="primary"):
+            team1 = st.session_state.teams[t1]["players"]
+            team2 = st.session_state.teams[t2]["players"]
+            player1 = next(p for p in team1 if p["player"] == p1)
+            player2 = next(p for p in team2 if p["player"] == p2)
+            team1.remove(player1)
+            team2.remove(player2)
+            team1.append(player2)
+            team2.append(player1)
+            log_event(
+                st.session_state.auction_id,
+                "trade_accepted",
+                team_a=t1, team_b=t2, player_a=p1, player_b=p2,
+            )
+            st.success("Trade Completed")
+    with trade_cols[2]:
+        if st.button("Reject Trade", key="trade_reject"):
+            log_event(
+                st.session_state.auction_id,
+                "trade_rejected",
+                team_a=t1, team_b=t2, player_a=p1, player_b=p2,
+            )
+            st.warning("Trade rejected")
 
     if st.button("Finish Trade"):
         st.session_state.page = "summary"
@@ -1265,6 +1546,48 @@ elif st.session_state.page == "report":
         )
     else:
         st.caption("No sales recorded.")
+
+    st.divider()
+    st.subheader("Event timeline")
+    events = read_events(aid)
+    if not events:
+        st.caption("No events recorded for this auction.")
+    else:
+        icons = {
+            "bid": "📈", "sell": "💰", "rtm_triggered": "🔁", "rtm_used": "🔁",
+            "rtm_skipped": "⏭", "new_player": "🆕", "trade_proposed": "🤝",
+            "trade_accepted": "✅", "trade_rejected": "❌", "auction_over": "🏁",
+        }
+        rows = []
+        for ev in reversed(events):
+            ic = icons.get(ev["type"], "•")
+            ts = ev.get("ts", "")[11:19]
+            etype = ev["type"]
+            if etype == "bid":
+                body = f"<b>{html.escape(ev.get('team',''))}</b> bid <b>₹{ev.get('amount','')}</b>"
+            elif etype == "sell":
+                body = f"Sold <b>{html.escape(ev.get('player',''))}</b> to <b>{html.escape(ev.get('team',''))}</b> for <b>₹{ev.get('amount','')}</b>"
+            elif etype == "rtm_used":
+                body = f"<b>{html.escape(ev.get('team',''))}</b> used RTM on <b>{html.escape(ev.get('player',''))}</b> (₹{ev.get('amount','')})"
+            elif etype == "rtm_triggered":
+                body = f"RTM offered to <b>{html.escape(ev.get('old_team',''))}</b> against <b>{html.escape(ev.get('new_team',''))}</b> on <b>{html.escape(ev.get('player',''))}</b> @ ₹{ev.get('amount','')}"
+            elif etype == "rtm_skipped":
+                body = f"<b>{html.escape(ev.get('old_team',''))}</b> skipped RTM on <b>{html.escape(ev.get('player',''))}</b>"
+            elif etype == "new_player":
+                body = f"New player: <b>{html.escape(ev.get('player',''))}</b> (set {html.escape(str(ev.get('set','')))}, base ₹{ev.get('base','')})"
+            elif etype in ("trade_proposed", "trade_accepted", "trade_rejected"):
+                body = f"Trade {etype.split('_')[1]}: <b>{html.escape(ev.get('team_a',''))}</b> ↔ <b>{html.escape(ev.get('team_b',''))}</b>"
+            elif etype == "auction_over":
+                body = "Auction completed"
+            else:
+                body = html.escape(str(ev))
+            rows.append(
+                f"<div class='tl-item'>"
+                f"<div class='tl-icon'>{ic}</div>"
+                f"<div class='tl-body'>{body}<div class='tl-ts'>{ts}</div></div>"
+                f"</div>"
+            )
+        st.markdown(f"<div class='timeline'>{''.join(rows)}</div>", unsafe_allow_html=True)
 
 
 # =========================================================

@@ -38,8 +38,11 @@ CREATE TABLE IF NOT EXISTS auctions (
     rtm_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     rtm_count INT NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'setup',
+    bid_tiers JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS bid_tiers JSONB;
 
 CREATE TABLE IF NOT EXISTS auction_teams (
     auction_id UUID REFERENCES auctions(id) ON DELETE CASCADE,
@@ -151,17 +154,27 @@ def create_auction(
     purse: int,
     rtm_enabled: bool,
     rtm_count: int,
+    bid_tiers=None,
 ) -> str:
     """Insert with a caller-supplied UUID so the UI doesn't block on this round-trip."""
+    tiers_json = psycopg2.extras.Json(bid_tiers) if bid_tiers is not None else None
     with get_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO auctions (id, name, auction_datetime, players_per_team, purse, rtm_enabled, rtm_count, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'active')
+            INSERT INTO auctions (id, name, auction_datetime, players_per_team, purse, rtm_enabled, rtm_count, bid_tiers, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'active')
             """,
-            (auction_id, name, auction_datetime, players_per_team, purse, rtm_enabled, rtm_count),
+            (auction_id, name, auction_datetime, players_per_team, purse, rtm_enabled, rtm_count, tiers_json),
         )
         return auction_id
+
+
+def update_bid_tiers(auction_id: str, bid_tiers) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE auctions SET bid_tiers = %s WHERE id = %s",
+            (psycopg2.extras.Json(bid_tiers), auction_id),
+        )
 
 
 def add_auction_team(auction_id: str, team_id: int, purse: int, rtm_remaining: int) -> None:
@@ -201,7 +214,7 @@ def list_auctions():
 def get_auction(auction_id: str):
     with get_cursor() as cur:
         cur.execute(
-            "SELECT id, name, auction_datetime, players_per_team, purse, rtm_enabled, rtm_count, status "
+            "SELECT id, name, auction_datetime, players_per_team, purse, rtm_enabled, rtm_count, status, bid_tiers "
             "FROM auctions WHERE id = %s",
             (auction_id,),
         )
