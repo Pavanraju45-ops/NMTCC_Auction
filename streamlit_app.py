@@ -9,7 +9,6 @@ import pandas as pd
 import streamlit as st
 
 import extra_streamlit_components as stx
-from st_aggrid import AgGrid, DataReturnMode, GridOptionsBuilder, GridUpdateMode
 
 from auth import (
     check_admin,
@@ -568,9 +567,10 @@ defaults = {
     # Setup wizard
     "setup_selected_teams": [],  # list of dicts {name, captain, color, id (or None)}
     "setup_draft": None,  # Screen-1 config, stashed while screen 2 picks players
-    "setup_selected_player_ids": [],  # IDs of players picked on screen 2, in display order
+    "setup_selected_player_ids": [],  # IDs of players picked on screen 2
     "setup_player_sets": {},  # player_id -> set (int)
     "setup_random_in_set": False,
+    "setup_player_sel_state": {},  # player_id -> {"selected": bool, "set": int}
     # Report
     "report_auction_id": None,
     # Bid ladder for the currently running auction
@@ -1592,72 +1592,87 @@ elif st.session_state.page == "setup_players":
     # ---- Available player pool ----
     st.subheader("Pick players for the auction pool")
     st.caption(
-        "Use the column filters to search (works on every keystroke). "
-        "Drag rows by the ⠿ handle to reorder. "
-        "Edit the Set column to group players — lower sets are auctioned first."
+        "Tick the players you want. Edit the Set column to group them — "
+        "lower sets are auctioned first."
     )
 
     all_master = cached_all_players()
     pool_players = [p for p in all_master if p["id"] not in captain_ids]
 
-    # Seed per-player set values (default 1), preserving prior choices if the user navigates back
-    existing_sets: dict = st.session_state.setup_player_sets or {}
-    df_rows = []
-    for p in pool_players:
-        df_rows.append(
-            {
-                "id": int(p["id"]),
-                "Name": p["name"],
-                "Role": p.get("role") or "",
-                "Set": int(existing_sets.get(p["id"], 1)),
-            }
-        )
-    import pandas as _pd
-    pool_df = _pd.DataFrame(df_rows)
-
-    if pool_df.empty:
+    if not pool_players:
         st.warning("No players in the master DB to show. Register players first.")
         st.stop()
 
-    gb = GridOptionsBuilder.from_dataframe(pool_df)
-    gb.configure_default_column(
-        filter=True, floatingFilter=True, resizable=True, editable=False
-    )
-    gb.configure_column("id", hide=True)
-    gb.configure_column(
-        "Name",
-        rowDrag=True,
-        checkboxSelection=True,
-        headerCheckboxSelection=True,
-        minWidth=260,
-    )
-    gb.configure_column("Role", minWidth=140)
-    gb.configure_column("Set", editable=True, minWidth=80)
-    gb.configure_selection("multiple", use_checkbox=True)
-    gb.configure_grid_options(
-        rowDragManaged=True,
-        animateRows=True,
-        suppressRowClickSelection=True,
-    )
+    # Persisted per-player state survives filter changes and re-renders.
+    sel_state: dict = st.session_state.get("setup_player_sel_state") or {}
+    # Seed defaults for any new players
+    for p in pool_players:
+        if p["id"] not in sel_state:
+            sel_state[p["id"]] = {"selected": False, "set": 1}
+    st.session_state.setup_player_sel_state = sel_state
 
-    grid_response = AgGrid(
+    q = st.text_input(
+        "Search players by name or role",
+        key="player_pool_search",
+        placeholder="Type to filter…",
+    )
+    q_lower = (q or "").strip().lower()
+
+    import pandas as _pd
+    filtered = [
+        p for p in pool_players
+        if not q_lower
+        or q_lower in (p["name"] or "").lower()
+        or q_lower in (p.get("role") or "").lower()
+    ]
+
+    rows_for_editor = [
+        {
+            "id": int(p["id"]),
+            "Pick": bool(sel_state[p["id"]]["selected"]),
+            "Name": p["name"],
+            "Role": p.get("role") or "",
+            "Set": int(sel_state[p["id"]]["set"]),
+        }
+        for p in filtered
+    ]
+    pool_df = _pd.DataFrame(rows_for_editor)
+
+    st.caption(f"Showing {len(filtered)} of {len(pool_players)} players")
+
+    edited_df = st.data_editor(
         pool_df,
-        gridOptions=gb.build(),
-        update_mode=GridUpdateMode.MODEL_CHANGED,
-        data_return_mode=DataReturnMode.AS_INPUT,
-        allow_unsafe_jscode=True,
-        height=520,
-        key="player_pool_grid",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "id": None,
+            "Pick": st.column_config.CheckboxColumn("Pick", default=False),
+            "Name": st.column_config.TextColumn(disabled=True),
+            "Role": st.column_config.TextColumn(disabled=True),
+            "Set": st.column_config.NumberColumn(min_value=1, max_value=99, step=1),
+        },
+        height=420,
+        key=f"player_pool_editor_{q_lower}",  # remount when filter changes
     )
 
-    updated_df = grid_response.get("data")
-    selected_rows = grid_response.get("selected_rows")
+    # Write the edits back into the persistent map
+    for _, row in edited_df.iterrows():
+        pid = int(row["id"])
+        sel_state[pid]["selected"] = bool(row["Pick"])
+        sel_state[pid]["set"] = int(row["Set"])
 
-    # selected_rows can be list-of-dict or DataFrame depending on version
-    if hasattr(selected_rows, "to_dict"):
-        selected_rows = selected_rows.to_dict("records")
-    selected_rows = selected_rows or []
-    selected_id_set = {int(r["id"]) for r in selected_rows}
+    # Bulk helpers
+    bulk_cols = st.columns([1, 1, 3])
+    with bulk_cols[0]:
+        if st.button("Select all (filtered)", key="pool_select_all", use_container_width=True):
+            for p in filtered:
+                sel_state[p["id"]]["selected"] = True
+            st.rerun()
+    with bulk_cols[1]:
+        if st.button("Clear all (filtered)", key="pool_clear_all", use_container_width=True):
+            for p in filtered:
+                sel_state[p["id"]]["selected"] = False
+            st.rerun()
 
     random_in_set = st.toggle(
         "Randomise draw within each set",
@@ -1666,7 +1681,8 @@ elif st.session_state.page == "setup_players":
     )
     st.session_state.setup_random_in_set = bool(random_in_set)
 
-    st.caption(f"**{len(selected_id_set)}** player(s) selected for the auction pool.")
+    selected_count = sum(1 for v in sel_state.values() if v["selected"])
+    st.caption(f"**{selected_count}** player(s) selected for the auction pool.")
 
     st.divider()
 
@@ -1679,11 +1695,30 @@ elif st.session_state.page == "setup_players":
     with nav_r:
         if st.button("🚀 Start Auction", type="primary", use_container_width=True, key="spx_start"):
             errors = []
-            if len(selected_id_set) == 0:
+            # Resolve the selection from the persistent sel_state map
+            selected_ordered = []
+            players_by_id = {p["id"]: p for p in pool_players}
+            for pid, s in sel_state.items():
+                if not s.get("selected"):
+                    continue
+                p = players_by_id.get(pid)
+                if not p:
+                    continue
+                selected_ordered.append(
+                    {
+                        "id": int(pid),
+                        "name": p["name"],
+                        "role": p.get("role") or "",
+                        "set": int(s.get("set") or 1),
+                    }
+                )
+            # Sort alphabetically within each set (no manual reordering)
+            selected_ordered.sort(key=lambda r: (r["set"], r["name"].lower()))
+
+            if not selected_ordered:
                 errors.append("Pick at least one player")
-            # Each team must have at least (players_per_team - 1) non-captain slots available
             min_non_captain = (int(draft["players_per_team"]) - 1) * len(teams_in_auction)
-            if len(selected_id_set) < min_non_captain:
+            if len(selected_ordered) < min_non_captain:
                 errors.append(
                     f"Need at least {min_non_captain} non-captain players for "
                     f"{len(teams_in_auction)} teams × {draft['players_per_team']} slots"
@@ -1693,18 +1728,6 @@ elif st.session_state.page == "setup_players":
                 for e in errors:
                     st.error(e)
             else:
-                # Persist per-player set choices + selection order into session state
-                ordered_rows = updated_df.to_dict("records") if hasattr(updated_df, "to_dict") else list(updated_df)
-                selected_ordered = [
-                    {
-                        "id": int(r["id"]),
-                        "name": str(r["Name"]),
-                        "role": str(r.get("Role") or ""),
-                        "set": int(r["Set"]) if r.get("Set") is not None else 1,
-                    }
-                    for r in ordered_rows
-                    if int(r["id"]) in selected_id_set
-                ]
                 st.session_state.setup_player_sets = {r["id"]: r["set"] for r in selected_ordered}
                 st.session_state.setup_selected_player_ids = [r["id"] for r in selected_ordered]
 
