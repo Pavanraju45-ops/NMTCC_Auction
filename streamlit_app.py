@@ -327,6 +327,30 @@ elif st.session_state.page == "auction":
             st.dataframe(pd.DataFrame(data["players"]), height=200)
 
 # =========================================================
+# TRADE
+# =========================================================
+elif st.session_state.page == "trade":
+
+    st.title("Trade Window")
+
+    teams = list(st.session_state.teams.keys())
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        t1 = st.selectbox("Team 1", teams)
+        st.dataframe(pd.DataFrame(st.session_state.teams[t1]["players"]))
+
+    with col2:
+        t2 = st.selectbox("Team 2", teams)
+        st.dataframe(pd.DataFrame(st.session_state.teams[t2]["players"]))
+
+    if st.button("Finish Trade"):
+        st.session_state.page = "summary"
+        st.rerun()
+
+
+# =========================================================
 # SUMMARY
 # =========================================================
 elif st.session_state.page == "summary":
@@ -345,4 +369,9 @@ elif st.session_state.page == "summary":
                 pd.DataFrame(data["players"]).to_excel(writer, sheet_name=team[:30])
         return output.getvalue()
 
-    st.download_button("Download Excel", export(), "auction.xlsx")
+    st.download_button("Download Results", export(), "auction.xlsx")
+
+    if st.button("Restart"):
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
+        st.rerun()
