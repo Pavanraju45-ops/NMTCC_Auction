@@ -318,9 +318,18 @@ except Exception as e:
 
 
 # ---------------- Cached reads ----------------
+def _bytea_to_bytes(row: dict) -> dict:
+    """psycopg2 returns BYTEA as memoryview which won't pickle. Copy + normalize."""
+    d = dict(row)
+    v = d.get("logo")
+    if isinstance(v, memoryview):
+        d["logo"] = bytes(v)
+    return d
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def cached_master_teams():
-    return list_master_teams()
+    return [_bytea_to_bytes(r) for r in list_master_teams()]
 
 
 @st.cache_data(ttl=15, show_spinner=False)
