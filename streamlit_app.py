@@ -23,20 +23,26 @@ from db import (
     add_auction_team,
     create_auction,
     create_master_team,
+    create_player,
     get_auction,
     get_auction_players_ordered,
     get_auction_results_detailed,
     get_auction_teams_full,
     get_master_team_by_name,
+    get_player,
+    get_player_auctions,
     get_team_auctions,
     init_schema,
     list_auctions,
     list_master_teams,
+    list_players,
     record_sale,
     update_auction_status,
     update_bid_tiers,
     update_master_team,
     update_master_team_logo,
+    update_player,
+    update_player_photo,
 )
 from logos import avatar_html, logo_data_uri, process_uploaded_logo
 from event_log import log_event, read_events
@@ -557,6 +563,64 @@ for k, v in defaults.items():
 
 
 # =========================================================
+# PUBLIC ROUTE — player self-registration (no auth)
+# =========================================================
+if st.query_params.get("page") == "register":
+    st.markdown("<h1 class='hero-title'>🏏 Player Registration</h1>", unsafe_allow_html=True)
+    st.markdown(
+        "<p class='hero-sub'>Register yourself with the club for upcoming auctions</p>",
+        unsafe_allow_html=True,
+    )
+
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("public_register"):
+            r_name = st.text_input("Name *")
+            r_col1, r_col2 = st.columns(2)
+            with r_col1:
+                r_mobile = st.text_input("Mobile *")
+            with r_col2:
+                r_email = st.text_input("Email *")
+            r_role = st.selectbox(
+                "Role",
+                options=["", "Batsman", "Bowler", "All-rounder", "Wicket-keeper"],
+                index=0,
+            )
+            r_base = st.number_input("Preferred base price", min_value=1, max_value=100, value=5)
+            r_dob = st.date_input("Date of birth", value=None)
+            r_notes = st.text_area("Anything else we should know?", placeholder="(optional)")
+            submitted = st.form_submit_button("Register", type="primary", use_container_width=True)
+            if submitted:
+                errors = []
+                if not r_name.strip():
+                    errors.append("Name is required")
+                if not r_mobile.strip():
+                    errors.append("Mobile is required")
+                if not r_email.strip():
+                    errors.append("Email is required")
+                if errors:
+                    for e in errors:
+                        st.error(e)
+                else:
+                    try:
+                        pid = create_player(
+                            name=r_name,
+                            mobile=r_mobile,
+                            email=r_email,
+                            role=r_role or None,
+                            base_price=int(r_base),
+                            dob=r_dob,
+                            notes=r_notes,
+                        )
+                        st.success(f"Registered! Your player ID is {pid}.")
+                    except ValueError as ve:
+                        st.error(str(ve))
+                    except Exception as e:
+                        st.error(f"Could not register: {e}")
+    st.stop()
+
+
+# =========================================================
 # AUTH GATE
 # =========================================================
 # Restore session from cookie if present + valid
@@ -641,9 +705,21 @@ if st.session_state.page == "home":
             st.session_state.page = "setup"
             st.rerun()
 
-        if st.button("🧑‍🤝‍🧑 Manage Teams", use_container_width=True):
-            st.session_state.page = "teams"
-            st.rerun()
+        btn_row = st.columns(2)
+        with btn_row[0]:
+            if st.button("🧑‍🤝‍🧑 Manage Teams", use_container_width=True):
+                st.session_state.page = "teams"
+                st.rerun()
+        with btn_row[1]:
+            if st.button("🏏 Players", use_container_width=True):
+                st.session_state.page = "players"
+                st.rerun()
+
+        st.caption(
+            f"Public player registration: `{st.context.url if hasattr(st, 'context') else '?'}?page=register`"
+            if False
+            else "Share the public registration link: `/?page=register`"
+        )
 
         st.markdown("&nbsp;", unsafe_allow_html=True)
 
@@ -684,6 +760,224 @@ if st.session_state.page == "home":
                         else:
                             st.caption(f"_{status}_")
                     st.divider()
+
+
+# =========================================================
+# PLAYERS — master player management (edit + auction history + CSV import)
+# =========================================================
+elif st.session_state.page == "players":
+    top_l, top_r = st.columns([5, 1])
+    with top_l:
+        st.title("Players")
+        st.caption(
+            "Master list of all registered players. Public registration URL: `/?page=register`"
+        )
+    with top_r:
+        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        if st.button("← Home", key="players_back_home", use_container_width=True):
+            st.session_state.page = "home"
+            st.rerun()
+
+    tabs = st.tabs(["Directory", "Add player", "CSV import"])
+
+    # -------- Directory tab --------
+    with tabs[0]:
+        search = st.text_input("Search by name, mobile, or email", key="players_search")
+        rows = list_players(search or None)
+        st.caption(f"{len(rows)} player(s) match")
+        if not rows:
+            st.info("No players yet. Share `/?page=register` or use the Add / Import tabs.")
+        for p in rows:
+            with st.container(border=True):
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    initials = html.escape((p["name"][:1] or "?").upper())
+                    meta_bits = [
+                        f"Role: {html.escape(p['role'])}" if p.get("role") else None,
+                        f"Base: ₹{p['base_price']}",
+                        f"📱 {html.escape(p['mobile'])}" if p.get("mobile") else None,
+                        f"✉️ {html.escape(p['email'])}" if p.get("email") else None,
+                    ]
+                    meta = " · ".join(b for b in meta_bits if b)
+                    st.markdown(
+                        f"<div style='display:flex; align-items:center; gap:0.9rem;'>"
+                        f"<div style='width:44px; height:44px; border-radius:10px; "
+                        f"background:#1e293b; color:white; display:flex; "
+                        f"align-items:center; justify-content:center; font-weight:800;'>"
+                        f"{initials}</div>"
+                        f"<div><div style='font-size:1.05rem; font-weight:700;'>"
+                        f"{html.escape(p['name'])}</div>"
+                        f"<div style='color:#64748b; font-size:0.85rem;'>{meta}</div></div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    with st.popover("⚙️ Edit", use_container_width=True):
+                        pid = p["id"]
+                        e_name = st.text_input("Name *", value=p["name"], key=f"p_name_{pid}")
+                        e_role = st.selectbox(
+                            "Role",
+                            options=["", "Batsman", "Bowler", "All-rounder", "Wicket-keeper"],
+                            index=(
+                                ["", "Batsman", "Bowler", "All-rounder", "Wicket-keeper"].index(p["role"])
+                                if p.get("role") in ["Batsman", "Bowler", "All-rounder", "Wicket-keeper"]
+                                else 0
+                            ),
+                            key=f"p_role_{pid}",
+                        )
+                        e_mob, e_eml = st.columns(2)
+                        with e_mob:
+                            e_mobile = st.text_input(
+                                "Mobile", value=p.get("mobile") or "", key=f"p_mob_{pid}"
+                            )
+                        with e_eml:
+                            e_email = st.text_input(
+                                "Email", value=p.get("email") or "", key=f"p_eml_{pid}"
+                            )
+                        e_base = st.number_input(
+                            "Base price",
+                            min_value=1,
+                            max_value=100,
+                            value=int(p["base_price"]),
+                            key=f"p_base_{pid}",
+                        )
+                        e_dob = st.date_input(
+                            "DOB",
+                            value=p.get("dob"),
+                            key=f"p_dob_{pid}",
+                        )
+                        e_notes = st.text_area(
+                            "Notes", value=p.get("notes") or "", key=f"p_notes_{pid}"
+                        )
+                        if st.button("Save", key=f"p_save_{pid}", type="primary", use_container_width=True):
+                            try:
+                                update_player(
+                                    pid,
+                                    name=e_name,
+                                    mobile=e_mobile,
+                                    email=e_email,
+                                    role=e_role or None,
+                                    base_price=int(e_base),
+                                    dob=e_dob,
+                                    notes=e_notes,
+                                )
+                                st.success("Saved")
+                                st.rerun()
+                            except ValueError as ve:
+                                st.error(str(ve))
+                            except Exception as ex:
+                                st.error(f"Could not save: {ex}")
+
+                with st.expander("📊 Auction history"):
+                    hist = get_player_auctions(p["id"])
+                    if not hist:
+                        st.caption("No auction sales recorded for this player yet.")
+                    for a in hist:
+                        dt = (
+                            a["auction_datetime"].strftime("%Y-%m-%d")
+                            if a.get("auction_datetime")
+                            else ""
+                        )
+                        rtm_tag = " · 🔁 RTM" if a.get("is_rtm") else ""
+                        left, right = st.columns([4, 1])
+                        with left:
+                            st.markdown(
+                                f"**{html.escape(a['auction_name'] or '(unnamed)')}** — {dt} · "
+                                f"Sold to <b style='color:{a['team_color']}'>"
+                                f"{html.escape(a['team_name'])}</b> for **₹{a['sold_price']}**"
+                                f"{rtm_tag}",
+                                unsafe_allow_html=True,
+                            )
+                        with right:
+                            if a["status"] == "completed":
+                                if st.button(
+                                    "Report",
+                                    key=f"phist_{p['id']}_{a['id']}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state.report_auction_id = str(a["id"])
+                                    st.session_state.page = "report"
+                                    st.rerun()
+
+    # -------- Add player tab --------
+    with tabs[1]:
+        with st.form("add_player_form"):
+            a_name = st.text_input("Name *")
+            c1, c2 = st.columns(2)
+            with c1:
+                a_mobile = st.text_input("Mobile")
+            with c2:
+                a_email = st.text_input("Email")
+            a_role = st.selectbox(
+                "Role",
+                options=["", "Batsman", "Bowler", "All-rounder", "Wicket-keeper"],
+                index=0,
+            )
+            a_base = st.number_input("Base price", min_value=1, max_value=100, value=5)
+            a_dob = st.date_input("Date of birth", value=None)
+            a_notes = st.text_area("Notes")
+            if st.form_submit_button("Add player", type="primary"):
+                try:
+                    pid = create_player(
+                        name=a_name,
+                        mobile=a_mobile,
+                        email=a_email,
+                        role=a_role or None,
+                        base_price=int(a_base),
+                        dob=a_dob,
+                        notes=a_notes,
+                    )
+                    st.success(f"Added player (id: {pid})")
+                    st.rerun()
+                except ValueError as ve:
+                    st.error(str(ve))
+                except Exception as ex:
+                    st.error(f"Could not add: {ex}")
+
+    # -------- CSV import tab --------
+    with tabs[2]:
+        st.caption(
+            "Upload a CSV with headers: `name` (required), plus any of "
+            "`mobile`, `email`, `role`, `base_price`, `dob` (YYYY-MM-DD), `notes`. "
+            "Rows with duplicate mobile/email already in the DB are skipped."
+        )
+        csv_file = st.file_uploader("Players CSV", type=["csv"], key="players_csv")
+        if csv_file is not None:
+            try:
+                csv_df = pd.read_csv(csv_file)
+                csv_df.columns = csv_df.columns.str.strip().str.lower().str.replace(" ", "_")
+                if "name" not in csv_df.columns:
+                    st.error("CSV must have a `name` column")
+                else:
+                    st.dataframe(csv_df.head(10), use_container_width=True)
+                    st.caption(f"{len(csv_df)} rows detected (preview of first 10)")
+                    if st.button("Import all", type="primary"):
+                        ok = 0
+                        skipped = 0
+                        errors = []
+                        for _, r in csv_df.iterrows():
+                            try:
+                                create_player(
+                                    name=str(r.get("name") or "").strip(),
+                                    mobile=str(r.get("mobile") or "").strip() or None,
+                                    email=str(r.get("email") or "").strip() or None,
+                                    role=str(r.get("role") or "").strip() or None,
+                                    base_price=int(r.get("base_price") or 5),
+                                    dob=pd.to_datetime(r["dob"]).date() if r.get("dob") and pd.notna(r.get("dob")) else None,
+                                    notes=str(r.get("notes") or "").strip() or None,
+                                )
+                                ok += 1
+                            except ValueError:
+                                skipped += 1
+                            except Exception as ex:
+                                errors.append(str(ex))
+                        st.success(f"Imported {ok}, skipped {skipped} duplicates")
+                        if errors:
+                            st.warning(f"{len(errors)} row(s) failed with other errors")
+                            for e in errors[:5]:
+                                st.caption(f"• {e}")
+            except Exception as e:
+                st.error(f"Could not parse CSV: {e}")
 
 
 # =========================================================

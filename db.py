@@ -25,6 +25,26 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS players_master (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    mobile TEXT,
+    email TEXT,
+    role TEXT,
+    base_price INT NOT NULL DEFAULT 5,
+    dob DATE,
+    photo BYTEA,
+    photo_mime TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Case-insensitive uniqueness only when the field is populated
+CREATE UNIQUE INDEX IF NOT EXISTS ux_players_mobile
+    ON players_master (LOWER(mobile)) WHERE mobile IS NOT NULL AND mobile <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_players_email
+    ON players_master (LOWER(email)) WHERE email IS NOT NULL AND email <> '';
+
 CREATE TABLE IF NOT EXISTS teams_master (
     id SERIAL PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
@@ -177,6 +197,158 @@ def update_master_team(team_id: int, name: str, captain: str, color: str, text_c
             "UPDATE teams_master SET name = %s, captain = %s, color = %s, text_color = %s WHERE id = %s",
             (name, captain, color, text_color, team_id),
         )
+
+
+# ---------- players master ----------
+
+_PLAYER_COLS = "id, name, mobile, email, role, base_price, dob, photo, photo_mime, notes, created_at"
+
+
+def _normalize_optional(s):
+    if s is None:
+        return None
+    s = str(s).strip()
+    return s or None
+
+
+def list_players(search: str | None = None):
+    with get_cursor() as cur:
+        if search:
+            q = f"%{search.strip().lower()}%"
+            cur.execute(
+                f"SELECT {_PLAYER_COLS} FROM players_master "
+                f"WHERE LOWER(name) LIKE %s OR LOWER(COALESCE(mobile,'')) LIKE %s "
+                f"OR LOWER(COALESCE(email,'')) LIKE %s "
+                f"ORDER BY name",
+                (q, q, q),
+            )
+        else:
+            cur.execute(f"SELECT {_PLAYER_COLS} FROM players_master ORDER BY name")
+        return cur.fetchall()
+
+
+def get_player(player_id: int):
+    with get_cursor() as cur:
+        cur.execute(f"SELECT {_PLAYER_COLS} FROM players_master WHERE id = %s", (player_id,))
+        return cur.fetchone()
+
+
+def _check_player_unique(mobile: str | None, email: str | None, exclude_id: int | None = None):
+    """Raise ValueError with a friendly message if another player has this mobile/email."""
+    checks = []
+    params: list = []
+    if mobile:
+        checks.append("LOWER(mobile) = LOWER(%s)")
+        params.append(mobile)
+    if email:
+        checks.append("LOWER(email) = LOWER(%s)")
+        params.append(email)
+    if not checks:
+        return
+    where = " OR ".join(checks)
+    if exclude_id is not None:
+        where = f"({where}) AND id <> %s"
+        params.append(exclude_id)
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT id, mobile, email FROM players_master WHERE {where} LIMIT 1",
+            tuple(params),
+        )
+        row = cur.fetchone()
+    if row:
+        if mobile and row.get("mobile") and mobile.lower() == (row["mobile"] or "").lower():
+            raise ValueError(f"Mobile {mobile} is already registered")
+        raise ValueError(f"Email {email} is already registered")
+
+
+def create_player(
+    name: str,
+    mobile: str | None = None,
+    email: str | None = None,
+    role: str | None = None,
+    base_price: int = 5,
+    dob=None,
+    notes: str | None = None,
+) -> int:
+    name = name.strip()
+    if not name:
+        raise ValueError("Name is required")
+    mobile = _normalize_optional(mobile)
+    email = _normalize_optional(email)
+    _check_player_unique(mobile, email)
+    with get_cursor() as cur:
+        cur.execute(
+            "INSERT INTO players_master (name, mobile, email, role, base_price, dob, notes) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (name, mobile, email, _normalize_optional(role), int(base_price), dob, _normalize_optional(notes)),
+        )
+        return cur.fetchone()["id"]
+
+
+def update_player(
+    player_id: int,
+    name: str,
+    mobile: str | None,
+    email: str | None,
+    role: str | None,
+    base_price: int,
+    dob,
+    notes: str | None,
+) -> None:
+    name = name.strip()
+    if not name:
+        raise ValueError("Name is required")
+    mobile = _normalize_optional(mobile)
+    email = _normalize_optional(email)
+    _check_player_unique(mobile, email, exclude_id=player_id)
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE players_master SET name=%s, mobile=%s, email=%s, role=%s, "
+            "base_price=%s, dob=%s, notes=%s WHERE id = %s",
+            (
+                name,
+                mobile,
+                email,
+                _normalize_optional(role),
+                int(base_price),
+                dob,
+                _normalize_optional(notes),
+                player_id,
+            ),
+        )
+
+
+def update_player_photo(player_id: int, photo_bytes, photo_mime: str | None) -> None:
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE players_master SET photo = %s, photo_mime = %s WHERE id = %s",
+            (
+                psycopg2.Binary(photo_bytes) if photo_bytes else None,
+                photo_mime if photo_bytes else None,
+                player_id,
+            ),
+        )
+
+
+def get_player_auctions(player_id: int):
+    """Auctions where this master-player was sold, via auction_results → auction_players.name join."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.id, a.name AS auction_name, a.auction_datetime, a.status,
+                   ar.sold_price, ar.is_rtm,
+                   tm.name AS team_name, tm.color AS team_color, tm.text_color AS team_text_color
+            FROM players_master pm
+            JOIN auction_players ap ON LOWER(ap.name) = LOWER(pm.name)
+            JOIN auction_results ar ON ar.player_id = ap.id
+            JOIN auctions a ON a.id = ar.auction_id
+            JOIN teams_master tm ON tm.id = ar.team_id
+            WHERE pm.id = %s
+            ORDER BY a.auction_datetime DESC
+            """,
+            (player_id,),
+        )
+        return cur.fetchall()
 
 
 def get_team_auctions(team_id: int):
