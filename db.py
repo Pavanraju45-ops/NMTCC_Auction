@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS teams_master (
     id SERIAL PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     captain TEXT,
+    captain_id INT,
     color TEXT NOT NULL,
     text_color TEXT NOT NULL DEFAULT '#ffffff',
     logo BYTEA,
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS teams_master (
 ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS text_color TEXT NOT NULL DEFAULT '#ffffff';
 ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS logo BYTEA;
 ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS logo_mime TEXT;
+ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS captain_id INT;
 
 CREATE TABLE IF NOT EXISTS auctions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -152,7 +154,7 @@ def init_schema() -> None:
 
 # ---------- teams master ----------
 
-_TEAM_COLS = "id, name, captain, color, text_color, logo, logo_mime"
+_TEAM_COLS = "id, name, captain, captain_id, color, text_color, logo, logo_mime"
 
 
 def list_master_teams():
@@ -183,20 +185,35 @@ def update_master_team_logo(team_id: int, logo_bytes, logo_mime: str | None) -> 
         )
 
 
-def create_master_team(name: str, captain: str, color: str, text_color: str) -> int:
+def create_master_team(
+    name: str,
+    captain: str,
+    color: str,
+    text_color: str,
+    captain_id: int | None = None,
+) -> int:
     with get_cursor() as cur:
         cur.execute(
-            "INSERT INTO teams_master (name, captain, color, text_color) VALUES (%s, %s, %s, %s) RETURNING id",
-            (name, captain, color, text_color),
+            "INSERT INTO teams_master (name, captain, captain_id, color, text_color) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (name, captain, captain_id, color, text_color),
         )
         return cur.fetchone()["id"]
 
 
-def update_master_team(team_id: int, name: str, captain: str, color: str, text_color: str) -> None:
+def update_master_team(
+    team_id: int,
+    name: str,
+    captain: str,
+    color: str,
+    text_color: str,
+    captain_id: int | None = None,
+) -> None:
     with get_cursor() as cur:
         cur.execute(
-            "UPDATE teams_master SET name = %s, captain = %s, color = %s, text_color = %s WHERE id = %s",
-            (name, captain, color, text_color, team_id),
+            "UPDATE teams_master SET name = %s, captain = %s, captain_id = %s, "
+            "color = %s, text_color = %s WHERE id = %s",
+            (name, captain, captain_id, color, text_color, team_id),
         )
 
 

@@ -347,6 +347,23 @@ def cached_master_teams():
     return [_bytea_to_bytes(r) for r in list_master_teams()]
 
 
+def _player_row_to_bytes(row: dict) -> dict:
+    d = dict(row)
+    v = d.get("photo")
+    if isinstance(v, memoryview):
+        d["photo"] = bytes(v)
+    return d
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def cached_all_players():
+    return [_player_row_to_bytes(r) for r in list_players()]
+
+
+def invalidate_players_cache():
+    cached_all_players.clear()
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def cached_recent_auctions():
     return list_auctions()
@@ -935,6 +952,7 @@ elif st.session_state.page == "players":
                         dob=a_dob,
                         notes=a_notes,
                     )
+                    invalidate_players_cache()
                     st.success(f"Added player (id: {pid})")
                     st.rerun()
                 except ValueError as ve:
@@ -1036,10 +1054,38 @@ elif st.session_state.page == "teams":
                             value=t["name"],
                             key=f"edit_name_{t['id']}",
                         )
-                        new_cap = st.text_input(
-                            "Captain",
-                            value=t.get("captain") or "",
-                            key=f"edit_cap_{t['id']}",
+                        # Captain picker: searchable dropdown of players_master
+                        _edit_players = cached_all_players()
+                        _edit_player_label = {
+                            p["id"]: f"{p['name']}" + (f" ({p['role']})" if p.get("role") else "")
+                            for p in _edit_players
+                        }
+                        _edit_player_ids = [p["id"] for p in _edit_players]
+                        # Pre-select existing captain if known
+                        _current_cap_id = t.get("captain_id")
+                        if _current_cap_id is None and t.get("captain"):
+                            _current_cap_id = next(
+                                (p["id"] for p in _edit_players
+                                 if p["name"].lower() == (t["captain"] or "").lower()),
+                                None,
+                            )
+                        _edit_options = [None] + _edit_player_ids
+                        _edit_index = (
+                            _edit_options.index(_current_cap_id)
+                            if _current_cap_id in _edit_options
+                            else 0
+                        )
+                        new_cap_id = st.selectbox(
+                            "Captain (search players)",
+                            options=_edit_options,
+                            index=_edit_index,
+                            format_func=lambda pid: "— pick a player —" if pid is None else _edit_player_label.get(pid, "?"),
+                            key=f"edit_cap_id_{t['id']}",
+                        )
+                        new_cap = (
+                            next((p["name"] for p in _edit_players if p["id"] == new_cap_id), "")
+                            if new_cap_id
+                            else ""
                         )
                         bg_col, fg_col = st.columns(2)
                         with bg_col:
@@ -1083,7 +1129,7 @@ elif st.session_state.page == "teams":
                         preview_label = (
                             (new_name.strip() or "Team")
                             + " · "
-                            + (new_cap.strip() or "Captain")
+                            + (new_cap or "Captain")
                         )
                         st.markdown(
                             f"<div style='display:flex; align-items:center; gap:0.6rem; margin:0.4rem 0;'>"
@@ -1115,13 +1161,20 @@ elif st.session_state.page == "teams":
                             nn = new_name.strip()
                             if not nn:
                                 st.error("Team name required")
+                            elif not new_cap_id:
+                                st.error("Pick a captain from the player list")
                             else:
                                 existing = get_master_team_by_name(nn)
                                 if existing and existing["id"] != t["id"]:
                                     st.error(f"Another team already named '{nn}'")
                                 else:
                                     update_master_team(
-                                        t["id"], nn, new_cap.strip(), new_bg, new_fg
+                                        t["id"],
+                                        nn,
+                                        new_cap,
+                                        new_bg,
+                                        new_fg,
+                                        captain_id=int(new_cap_id),
                                     )
                                     if new_logo_bytes:
                                         update_master_team_logo(
@@ -1286,6 +1339,7 @@ elif st.session_state.page == "setup":
                 "id": team["id"],
                 "name": team["name"],
                 "captain": team["captain"],
+                "captain_id": team.get("captain_id"),
                 "color": team["color"],
                 "text_color": team.get("text_color") or "#ffffff",
                 "logo": team.get("logo"),
@@ -1310,7 +1364,26 @@ elif st.session_state.page == "setup":
         with st.popover("➕ Add new team"):
             # Plain widgets (not inside a form) so the preview updates live
             new_name = st.text_input("Team Name", key="new_team_name")
-            new_captain = st.text_input("Captain", key="new_team_captain")
+
+            # Captain picker: searchable dropdown backed by players_master.
+            _all_players = cached_all_players()
+            _player_id_to_label = {
+                p["id"]: f"{p['name']}" + (f" ({p['role']})" if p.get("role") else "")
+                for p in _all_players
+            }
+            new_captain_id = st.selectbox(
+                "Captain (search players)",
+                options=[None] + [p["id"] for p in _all_players],
+                index=0,
+                format_func=lambda pid: "— pick a player —" if pid is None else _player_id_to_label.get(pid, "?"),
+                key="new_team_captain_id",
+            )
+            new_captain = (
+                next((p["name"] for p in _all_players if p["id"] == new_captain_id), "")
+                if new_captain_id
+                else ""
+            )
+
             c_bg, c_fg = st.columns(2)
             with c_bg:
                 new_color = st.color_picker("Background", value="#3b82f6", key="new_team_bg")
@@ -1338,7 +1411,7 @@ elif st.session_state.page == "setup":
                 new_text_color,
                 size_px=36,
             )
-            preview_label = (new_name.strip() or "Team") + " · " + (new_captain.strip() or "Captain")
+            preview_label = (new_name.strip() or "Team") + " · " + (new_captain or "Captain")
             st.markdown(
                 f"<div style='display:flex; align-items:center; gap:0.6rem; margin:0.4rem 0;'>"
                 f"{preview_avatar}"
@@ -1352,6 +1425,8 @@ elif st.session_state.page == "setup":
                 nn = new_name.strip()
                 if not nn:
                     st.error("Team name required")
+                elif not new_captain_id:
+                    st.error("Pick a captain from the player list")
                 elif len(st.session_state.setup_selected_teams) >= 15:
                     st.error("Maximum 15 teams reached")
                 elif nn.lower() in [n.lower() for n in selected_names]:
@@ -1362,7 +1437,11 @@ elif st.session_state.page == "setup":
                         st.error(f"Team '{nn}' already exists in saved teams. Use the dropdown to add it.")
                     else:
                         team_id = create_master_team(
-                            nn, new_captain.strip(), new_color, new_text_color
+                            nn,
+                            new_captain,
+                            new_color,
+                            new_text_color,
+                            captain_id=int(new_captain_id),
                         )
                         if logo_bytes:
                             update_master_team_logo(team_id, logo_bytes, logo_mime)
@@ -1371,7 +1450,8 @@ elif st.session_state.page == "setup":
                             {
                                 "id": team_id,
                                 "name": nn,
-                                "captain": new_captain.strip(),
+                                "captain": new_captain,
+                                "captain_id": int(new_captain_id),
                                 "color": new_color,
                                 "text_color": new_text_color,
                                 "logo": logo_bytes,
@@ -1379,7 +1459,7 @@ elif st.session_state.page == "setup":
                             }
                         )
                         # clear the form fields for the next entry
-                        for k in ("new_team_name", "new_team_captain", "new_team_logo"):
+                        for k in ("new_team_name", "new_team_captain_id", "new_team_logo"):
                             if k in st.session_state:
                                 del st.session_state[k]
                         st.rerun()
