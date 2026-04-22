@@ -10,25 +10,24 @@ defaults = {
     "page": "home",
     "teams": {},
     "players_df": None,
+    "players_per_team": 11,
+    "purse": 100,
     "bid": 5,
     "set_order": [],
     "set_players": {},
     "set_index": {},
     "current_set_idx": 0,
+    "unsold": [],
     "rtm_enabled": False,
+    "rtm_count": 0,
     "rtm_remaining": {},
     "current_bid_team": None,
-
-    # RTM
     "rtm_stage": None,
     "rtm_player": None,
     "rtm_price": 0,
     "rtm_counter_price": 0,
     "rtm_new_team": None,
-    "rtm_old_team": None,
-
-    # FIX
-    "sell_triggered": False
+    "rtm_old_team": None
 }
 
 for k, v in defaults.items():
@@ -44,7 +43,7 @@ if st.session_state.page == "home":
     st.markdown("<h1 style='text-align:center;'>🏏 NMTCC AUCTION</h1>", unsafe_allow_html=True)
     st.markdown("<h3 style='text-align:center;'>Flamingo Cup Season 1 - Part 2</h3>", unsafe_allow_html=True)
 
-    if st.button("Start Auction"):
+    if st.button("🚀 Start Auction"):
         st.session_state.page = "setup"
         st.rerun()
 
@@ -57,6 +56,7 @@ elif st.session_state.page == "setup":
     st.title("Auction Setup")
 
     num_teams = st.number_input("Number of Teams", 2, 10, 2)
+
     teams = {}
 
     for i in range(num_teams):
@@ -65,19 +65,31 @@ elif st.session_state.page == "setup":
         cap = col2.text_input("Captain", key=f"cap{i}")
 
         if name:
-            teams[name] = {"players": [], "purse": 100}
+            teams[name] = {"captain": cap, "players": [], "purse": 0}
 
     uploaded = st.file_uploader("Upload Excel", type=["xlsx"])
 
-    rtm = st.radio("RTM?", ["No", "Yes"])
+    players_per_team = st.number_input("Players per Team", 1, 20, 11)
+    purse = st.number_input("Auction Purse", 10, 500, 100)
+
+    rtm = st.radio("RTM Option?", ["No", "Yes"])
 
     if st.button("Next"):
+
+        if uploaded is None:
+            st.error("Upload Excel file")
+            st.stop()
 
         df = pd.read_excel(uploaded)
         df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
 
         st.session_state.teams = teams
         st.session_state.players_df = df
+        st.session_state.players_per_team = players_per_team
+        st.session_state.purse = purse
+
+        for t in teams:
+            teams[t]["purse"] = purse
 
         st.session_state.set_order = list(df["set"].unique())
         st.session_state.current_set_idx = 0
@@ -90,12 +102,11 @@ elif st.session_state.page == "setup":
 
         if rtm == "Yes":
             st.session_state.rtm_enabled = True
-            st.session_state.rtm_remaining = {t: 2 for t in teams}
+            st.session_state.page = "rtm"
+        else:
+            st.session_state.page = "auction"
 
-        st.session_state.page = "auction"
         st.rerun()
-
-
 # =========================================================
 # AUCTION
 # =========================================================
