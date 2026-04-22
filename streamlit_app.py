@@ -3382,33 +3382,262 @@ elif st.session_state.page == "report":
 
 
 # =========================================================
-# SUMMARY
+# SUMMARY — post-auction wrap-up
 # =========================================================
 elif st.session_state.page == "summary":
-    st.title("Auction Summary")
-    st.markdown(f"<div class='auction-id'>Auction ID: {st.session_state.auction_id}</div>", unsafe_allow_html=True)
+    teams_snapshot = st.session_state.teams or {}
+    auction_name = None
+    # Pull a friendly title — we don't store the name in session state directly,
+    # but setup_draft still has it if the auction was just created
+    draft = st.session_state.get("setup_draft") or {}
+    auction_name = draft.get("name")
+    purse = int(st.session_state.purse or 0)
+    min_players = int(st.session_state.players_per_team or 0)
 
-    for team, data in st.session_state.teams.items():
-        st.markdown(
-            f"<div class='team-head' style='background:{data['color']}; color:{data.get('text_color', '#ffffff')}; font-size:1.3rem;'>{team}</div>",
-            unsafe_allow_html=True,
+    header_l, header_r = st.columns([5, 1])
+    with header_l:
+        st.title(auction_name or "Auction Summary")
+        st.caption(
+            f"{len(teams_snapshot)} teams · purse {fmt_money(purse)} · "
+            f"min {min_players} players/team · bid ladder "
+            + " / ".join(
+                fmt_money(t["step"]) for t in (st.session_state.bid_tiers or [])
+            )
         )
-        st.write("Remaining Purse:", data["purse"])
-        st.dataframe(pd.DataFrame(data["players"]), use_container_width=True)
+    with header_r:
+        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        if st.button("← Home", key="summary_home", use_container_width=True):
+            keep = {"authenticated", "admin_username", "session_token"}
+            for k in list(st.session_state.keys()):
+                if k not in keep:
+                    del st.session_state[k]
+            st.rerun()
 
-    def export():
+    # ---------- Metrics (captains excluded) ----------
+    all_players_flat = []
+    for tname, tdata in teams_snapshot.items():
+        for p in tdata.get("players", []):
+            all_players_flat.append({**p, "team": tname})
+
+    non_cap = [p for p in all_players_flat if not p.get("is_captain")]
+    total_sold = len(non_cap)
+    total_spend = sum(int(p.get("sold") or 0) for p in non_cap)
+    top_buy = max(non_cap, key=lambda x: int(x.get("sold") or 0)) if non_cap else None
+    traded_count = sum(1 for p in all_players_flat if p.get("is_traded"))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Teams", len(teams_snapshot))
+    m2.metric("Players sold", total_sold)
+    m3.metric("Total spend", fmt_money(total_spend))
+    if top_buy:
+        m4.metric(
+            "Top buy",
+            fmt_money(top_buy["sold"]),
+            delta=f"{top_buy['player']} → {top_buy['team']}",
+            delta_color="off",
+        )
+    else:
+        m4.metric("Top buy", "—")
+
+    if traded_count:
+        st.caption(f"🔁 **{traded_count}** player(s) moved in this session's trades")
+
+    st.divider()
+
+    # ---------- Team cards grid ----------
+    st.subheader("Final squads")
+
+    def _summary_card(tname: str, tdata: dict) -> str:
+        bg = tdata["color"]
+        fg = tdata.get("text_color") or "#ffffff"
+        avatar = avatar_html(tname, tdata.get("logo"), tdata.get("logo_mime"), bg, fg, size_px=44)
+        safe_name = html.escape(tname)
+        safe_cap = html.escape(tdata.get("captain") or "—")
+
+        spent = purse - int(tdata.get("purse") or 0)
+        pct = min(100, max(0, int(round(100 * int(tdata.get("purse") or 0) / max(1, purse)))))
+        bar_cls = "" if pct >= 50 else (" low" if pct >= 20 else " critical")
+
+        non_cap_players = [p for p in tdata.get("players", []) if not p.get("is_captain")]
+        if non_cap_players:
+            rows = []
+            # Sort by price descending so top buys are at the top
+            for p in sorted(non_cap_players, key=lambda x: -int(x.get("sold") or 0)):
+                tags = []
+                if p.get("is_rtm"):
+                    tags.append("<span class='rtm-tag'>RTM</span>")
+                if p.get("is_traded"):
+                    tags.append("<span class='traded-tag'>↔</span>")
+                tag_html = " ".join(tags)
+                prefix = f"{tag_html} " if tag_html else ""
+                rows.append(
+                    f"<div class='player-row'>"
+                    f"<div class='player-cell-name'>{prefix}{html.escape(str(p['player']))}</div>"
+                    f"<div class='player-cell-price{' rtm' if p.get('is_rtm') else ''}'>{fmt_money(p['sold'])}</div>"
+                    f"</div>"
+                )
+            player_html = f"<div class='player-list' style='max-height:none;'>{''.join(rows)}</div>"
+        else:
+            player_html = "<div class='empty-squad'>No non-captain players</div>"
+
+        return (
+            f"<div class='team-card'>"
+            f"<div class='team-card-header' style='background:{bg}; color:{fg};'>"
+            f"<div style='display:flex; gap:0.7rem; align-items:center;'>"
+            f"{avatar}"
+            f"<div><div class='team-card-title'>{safe_name}</div>"
+            f"<div class='team-card-captain'>Captain: {safe_cap}</div></div>"
+            f"</div></div>"
+            f"<div class='team-card-body'>"
+            f"<div class='purse-row'>"
+            f"<div><div class='micro-label'>Spent</div>"
+            f"<div class='team-purse'>{fmt_money(spent)}</div></div>"
+            f"<div><div class='micro-label' style='text-align:right;'>Remaining</div>"
+            f"<div class='team-squad' style='color:#065f46;'>{fmt_money(tdata.get('purse') or 0)}</div></div>"
+            f"</div>"
+            f"<div class='purse-row' style='margin-top:0.6rem;'>"
+            f"<div><div class='micro-label'>Squad</div>"
+            f"<div class='team-squad'>{len([p for p in tdata.get('players', [])])}/{min_players}"
+            f"<span class='squad-hint'>incl. captain</span></div></div>"
+            f"</div>"
+            f"<div class='progress-bar' title='Purse remaining'>"
+            f"<div class='progress-bar-fill{bar_cls}' style='width:{pct}%'></div>"
+            f"</div>"
+            f"{player_html}"
+            f"</div>"
+            f"</div>"
+        )
+
+    team_items = list(teams_snapshot.items())
+    n = len(team_items)
+    cols_per_row = 3 if n <= 9 else 4 if n <= 12 else 5
+    for row_start in range(0, n, cols_per_row):
+        row = team_items[row_start:row_start + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for i, (tname, tdata) in enumerate(row):
+            with cols[i]:
+                st.markdown(_summary_card(tname, tdata), unsafe_allow_html=True)
+
+    # ---------- All sales table ----------
+    st.divider()
+    st.subheader("All sales")
+    if non_cap:
+        sales_df = pd.DataFrame(
+            [
+                {
+                    "Player": p["player"],
+                    "Sold to": p["team"],
+                    "Price": p["sold"],
+                    "Base": p.get("base"),
+                    "RTM": "✓" if p.get("is_rtm") else "",
+                    "Traded": "↔" if p.get("is_traded") else "",
+                }
+                for p in sorted(non_cap, key=lambda x: -int(x.get("sold") or 0))
+            ]
+        )
+        st.dataframe(sales_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No sales in this session.")
+
+    # ---------- Download ----------
+    def _build_workbook():
         output = BytesIO()
         with pd.ExcelWriter(output) as writer:
-            for team, data in st.session_state.teams.items():
-                pd.DataFrame(data["players"]).to_excel(writer, sheet_name=team[:30])
+            if non_cap:
+                pd.DataFrame(
+                    [
+                        {
+                            "Player": p["player"],
+                            "Sold to": p["team"],
+                            "Price (L)": p["sold"],
+                            "Base (L)": p.get("base"),
+                            "RTM": bool(p.get("is_rtm")),
+                            "Traded": bool(p.get("is_traded")),
+                        }
+                        for p in non_cap
+                    ]
+                ).to_excel(writer, sheet_name="All sales", index=False)
+            for tname, tdata in teams_snapshot.items():
+                if tdata.get("players"):
+                    pd.DataFrame(tdata["players"]).to_excel(
+                        writer, sheet_name=tname[:30], index=False
+                    )
         return output.getvalue()
 
-    st.download_button("Download Results", export(), "auction.xlsx")
+    # ---------- Timeline ----------
+    events = read_events(st.session_state.auction_id) if st.session_state.auction_id else []
+    with st.expander(f"⏱ Event timeline ({len(events)} events)", expanded=False):
+        if not events:
+            st.caption("No events recorded.")
+        else:
+            icons = {
+                "bid": "📈", "sell": "💰", "rtm_triggered": "🔁", "rtm_used": "🔁",
+                "rtm_skipped": "⏭", "new_player": "🆕", "trade_proposed": "🤝",
+                "trade_accepted": "✅", "trade_rejected": "❌", "unsold": "🚫", "auction_over": "🏁",
+            }
+            rows = []
+            for ev in reversed(events[-200:]):  # cap at last 200 events
+                ic = icons.get(ev["type"], "•")
+                ts = (ev.get("ts", "") or "")[11:19]
+                etype = ev["type"]
+                if etype == "bid":
+                    body = f"<b>{html.escape(ev.get('team',''))}</b> bid <b>{fmt_money(ev.get('amount',0))}</b>"
+                elif etype == "sell":
+                    body = f"Sold <b>{html.escape(ev.get('player',''))}</b> to <b>{html.escape(ev.get('team',''))}</b> for <b>{fmt_money(ev.get('amount',0))}</b>"
+                elif etype == "rtm_used":
+                    body = f"<b>{html.escape(ev.get('team',''))}</b> used RTM on <b>{html.escape(ev.get('player',''))}</b> ({fmt_money(ev.get('amount',0))})"
+                elif etype == "new_player":
+                    body = f"<b>{html.escape(ev.get('player',''))}</b> called · base {fmt_money(ev.get('base',0))}"
+                elif etype == "unsold":
+                    body = f"<b>{html.escape(ev.get('player',''))}</b> unsold"
+                elif etype in ("trade_proposed", "trade_accepted", "trade_rejected"):
+                    verb = etype.split("_")[1]
+                    give_names = ", ".join(ev.get("give") or []) or ""
+                    take_names = ", ".join(ev.get("take") or []) or ""
+                    take_html = (
+                        f" ↔ <b>{html.escape(ev.get('to_team',''))}</b> ({html.escape(take_names)})"
+                        if take_names
+                        else f" → <b>{html.escape(ev.get('to_team',''))}</b> (transfer)"
+                    )
+                    body = (
+                        f"Trade {verb}: <b>{html.escape(ev.get('from_team',''))}</b>"
+                        f" ({html.escape(give_names)}){take_html}"
+                    )
+                elif etype == "auction_over":
+                    body = "Auction completed"
+                else:
+                    body = html.escape(str(ev))
+                rows.append(
+                    f"<div class='tl-item'>"
+                    f"<div class='tl-icon'>{ic}</div>"
+                    f"<div class='tl-body'>{body}<div class='tl-ts'>{ts}</div></div>"
+                    f"</div>"
+                )
+            st.markdown(f"<div class='timeline'>{''.join(rows)}</div>", unsafe_allow_html=True)
 
-    if st.button("Back to Home"):
-        # reset runtime state but keep auth
-        keep = {"authenticated", "admin_username"}
-        for k in list(st.session_state.keys()):
-            if k not in keep:
-                del st.session_state[k]
-        st.rerun()
+    # ---------- Footer actions ----------
+    st.divider()
+    f1, f2, f3 = st.columns([1, 1, 2])
+    with f1:
+        st.download_button(
+            "⬇ Download results (xlsx)",
+            _build_workbook(),
+            file_name=f"{(auction_name or 'auction')[:40]}.xlsx",
+            use_container_width=True,
+        )
+    with f2:
+        if st.session_state.auction_id and st.button(
+            "📊 View saved report",
+            key="summary_view_report",
+            use_container_width=True,
+        ):
+            st.session_state.report_auction_id = st.session_state.auction_id
+            st.session_state.page = "report"
+            st.rerun()
+    with f3:
+        if st.button("✅ Finish — Back to Home", type="primary", key="summary_finish", use_container_width=True):
+            keep = {"authenticated", "admin_username", "session_token"}
+            for k in list(st.session_state.keys()):
+                if k not in keep:
+                    del st.session_state[k]
+            st.rerun()
