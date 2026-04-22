@@ -31,13 +31,14 @@ CREATE TABLE IF NOT EXISTS players_master (
     mobile TEXT,
     email TEXT,
     role TEXT,
-    base_price INT NOT NULL DEFAULT 5,
     dob DATE,
     photo BYTEA,
     photo_mime TEXT,
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE players_master DROP COLUMN IF EXISTS base_price;
 
 -- Case-insensitive uniqueness only when the field is populated
 CREATE UNIQUE INDEX IF NOT EXISTS ux_players_mobile
@@ -201,7 +202,7 @@ def update_master_team(team_id: int, name: str, captain: str, color: str, text_c
 
 # ---------- players master ----------
 
-_PLAYER_COLS = "id, name, mobile, email, role, base_price, dob, photo, photo_mime, notes, created_at"
+_PLAYER_COLS = "id, name, mobile, email, role, dob, photo, photo_mime, notes, created_at"
 
 
 def _normalize_optional(s):
@@ -266,7 +267,6 @@ def create_player(
     mobile: str | None = None,
     email: str | None = None,
     role: str | None = None,
-    base_price: int = 5,
     dob=None,
     notes: str | None = None,
 ) -> int:
@@ -278,9 +278,9 @@ def create_player(
     _check_player_unique(mobile, email)
     with get_cursor() as cur:
         cur.execute(
-            "INSERT INTO players_master (name, mobile, email, role, base_price, dob, notes) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (name, mobile, email, _normalize_optional(role), int(base_price), dob, _normalize_optional(notes)),
+            "INSERT INTO players_master (name, mobile, email, role, dob, notes) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (name, mobile, email, _normalize_optional(role), dob, _normalize_optional(notes)),
         )
         return cur.fetchone()["id"]
 
@@ -291,7 +291,6 @@ def update_player(
     mobile: str | None,
     email: str | None,
     role: str | None,
-    base_price: int,
     dob,
     notes: str | None,
 ) -> None:
@@ -304,13 +303,12 @@ def update_player(
     with get_cursor() as cur:
         cur.execute(
             "UPDATE players_master SET name=%s, mobile=%s, email=%s, role=%s, "
-            "base_price=%s, dob=%s, notes=%s WHERE id = %s",
+            "dob=%s, notes=%s WHERE id = %s",
             (
                 name,
                 mobile,
                 email,
                 _normalize_optional(role),
-                int(base_price),
                 dob,
                 _normalize_optional(notes),
                 player_id,

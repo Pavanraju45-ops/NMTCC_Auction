@@ -586,7 +586,6 @@ if st.query_params.get("page") == "register":
                 options=["", "Batsman", "Bowler", "All-rounder", "Wicket-keeper"],
                 index=0,
             )
-            r_base = st.number_input("Preferred base price", min_value=1, max_value=100, value=5)
             r_dob = st.date_input("Date of birth", value=None)
             r_notes = st.text_area("Anything else we should know?", placeholder="(optional)")
             submitted = st.form_submit_button("Register", type="primary", use_container_width=True)
@@ -608,7 +607,6 @@ if st.query_params.get("page") == "register":
                             mobile=r_mobile,
                             email=r_email,
                             role=r_role or None,
-                            base_price=int(r_base),
                             dob=r_dob,
                             notes=r_notes,
                         )
@@ -791,20 +789,26 @@ elif st.session_state.page == "players":
             with st.container(border=True):
                 c1, c2 = st.columns([5, 1])
                 with c1:
-                    initials = html.escape((p["name"][:1] or "?").upper())
+                    photo_bytes = p.get("photo")
+                    if isinstance(photo_bytes, memoryview):
+                        photo_bytes = bytes(photo_bytes)
+                    avatar = avatar_html(
+                        p["name"],
+                        photo_bytes,
+                        p.get("photo_mime"),
+                        bg="#1e293b",
+                        fg="#ffffff",
+                        size_px=48,
+                    )
                     meta_bits = [
                         f"Role: {html.escape(p['role'])}" if p.get("role") else None,
-                        f"Base: ₹{p['base_price']}",
                         f"📱 {html.escape(p['mobile'])}" if p.get("mobile") else None,
                         f"✉️ {html.escape(p['email'])}" if p.get("email") else None,
                     ]
                     meta = " · ".join(b for b in meta_bits if b)
                     st.markdown(
                         f"<div style='display:flex; align-items:center; gap:0.9rem;'>"
-                        f"<div style='width:44px; height:44px; border-radius:10px; "
-                        f"background:#1e293b; color:white; display:flex; "
-                        f"align-items:center; justify-content:center; font-weight:800;'>"
-                        f"{initials}</div>"
+                        f"{avatar}"
                         f"<div><div style='font-size:1.05rem; font-weight:700;'>"
                         f"{html.escape(p['name'])}</div>"
                         f"<div style='color:#64748b; font-size:0.85rem;'>{meta}</div></div>"
@@ -834,13 +838,6 @@ elif st.session_state.page == "players":
                             e_email = st.text_input(
                                 "Email", value=p.get("email") or "", key=f"p_eml_{pid}"
                             )
-                        e_base = st.number_input(
-                            "Base price",
-                            min_value=1,
-                            max_value=100,
-                            value=int(p["base_price"]),
-                            key=f"p_base_{pid}",
-                        )
                         e_dob = st.date_input(
                             "DOB",
                             value=p.get("dob"),
@@ -849,6 +846,18 @@ elif st.session_state.page == "players":
                         e_notes = st.text_area(
                             "Notes", value=p.get("notes") or "", key=f"p_notes_{pid}"
                         )
+                        e_photo = st.file_uploader(
+                            "Replace photo",
+                            type=["png", "jpg", "jpeg", "webp"],
+                            key=f"p_photo_{pid}",
+                        )
+                        new_photo_bytes = None
+                        new_photo_mime = None
+                        if e_photo is not None:
+                            try:
+                                new_photo_bytes, new_photo_mime = process_uploaded_logo(e_photo)
+                            except Exception as ex:
+                                st.error(f"Could not read photo: {ex}")
                         if st.button("Save", key=f"p_save_{pid}", type="primary", use_container_width=True):
                             try:
                                 update_player(
@@ -857,10 +866,11 @@ elif st.session_state.page == "players":
                                     mobile=e_mobile,
                                     email=e_email,
                                     role=e_role or None,
-                                    base_price=int(e_base),
                                     dob=e_dob,
                                     notes=e_notes,
                                 )
+                                if new_photo_bytes:
+                                    update_player_photo(pid, new_photo_bytes, new_photo_mime)
                                 st.success("Saved")
                                 st.rerun()
                             except ValueError as ve:
@@ -913,7 +923,6 @@ elif st.session_state.page == "players":
                 options=["", "Batsman", "Bowler", "All-rounder", "Wicket-keeper"],
                 index=0,
             )
-            a_base = st.number_input("Base price", min_value=1, max_value=100, value=5)
             a_dob = st.date_input("Date of birth", value=None)
             a_notes = st.text_area("Notes")
             if st.form_submit_button("Add player", type="primary"):
@@ -923,7 +932,6 @@ elif st.session_state.page == "players":
                         mobile=a_mobile,
                         email=a_email,
                         role=a_role or None,
-                        base_price=int(a_base),
                         dob=a_dob,
                         notes=a_notes,
                     )
@@ -938,7 +946,7 @@ elif st.session_state.page == "players":
     with tabs[2]:
         st.caption(
             "Upload a CSV with headers: `name` (required), plus any of "
-            "`mobile`, `email`, `role`, `base_price`, `dob` (YYYY-MM-DD), `notes`. "
+            "`mobile`, `email`, `role`, `dob` (YYYY-MM-DD), `notes`. "
             "Rows with duplicate mobile/email already in the DB are skipped."
         )
         csv_file = st.file_uploader("Players CSV", type=["csv"], key="players_csv")
@@ -962,7 +970,6 @@ elif st.session_state.page == "players":
                                     mobile=str(r.get("mobile") or "").strip() or None,
                                     email=str(r.get("email") or "").strip() or None,
                                     role=str(r.get("role") or "").strip() or None,
-                                    base_price=int(r.get("base_price") or 5),
                                     dob=pd.to_datetime(r["dob"]).date() if r.get("dob") and pd.notna(r.get("dob")) else None,
                                     notes=str(r.get("notes") or "").strip() or None,
                                 )
