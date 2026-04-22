@@ -64,6 +64,28 @@ def step_for_bid(current_bid: int, tiers: list[dict]) -> int:
             return int(tier["step"])
     return int(tiers[-1]["step"])
 
+
+def fmt_money(amount) -> str:
+    """Format an amount stored in lakhs. 100L = 1Cr.
+    100 -> '₹1Cr', 150 -> '₹1.5Cr', 225 -> '₹2.25Cr', 45 -> '₹45L'."""
+    if amount is None:
+        return "₹0"
+    try:
+        a = float(amount)
+    except (TypeError, ValueError):
+        return f"₹{amount}"
+    if a >= 100:
+        cr = a / 100.0
+        if abs(cr - round(cr)) < 1e-9:
+            return f"₹{int(round(cr))}Cr"
+        s = f"{cr:.2f}".rstrip("0").rstrip(".")
+        return f"₹{s}Cr"
+    # below 1 crore — show as lakhs
+    if abs(a - round(a)) < 1e-9:
+        return f"₹{int(round(a))}L"
+    s = f"{a:.2f}".rstrip("0").rstrip(".")
+    return f"₹{s}L"
+
 st.set_page_config(page_title="NMTCC Auction", layout="wide", page_icon="🏏")
 
 # Global styles
@@ -114,6 +136,10 @@ st.markdown(
         box-shadow: 0 12px 40px rgba(0,0,0,0.18);
     }
     .hero-player-name { font-size: 2.4rem; font-weight: 800; margin: 0; line-height: 1.1; }
+    .hero-player-role {
+        font-size: 0.85rem; text-transform: uppercase; letter-spacing: 3px;
+        color: #fbbf24; font-weight: 700; margin: 0.3rem 0 0.2rem 0;
+    }
     .hero-player-meta {
         font-size: 0.95rem; opacity: 0.75; margin: 0.2rem 0 1rem 0;
         letter-spacing: 1px;
@@ -397,6 +423,11 @@ def _load_auction_from_db(auction_id: str) -> dict:
     player_rows = get_auction_players_ordered(auction_id)
     result_rows = get_auction_results_detailed(auction_id)
 
+    # Enrich auction players with master player photo + role (best-effort name match).
+    master_by_name: dict = {
+        (p["name"] or "").strip().lower(): p for p in cached_all_players()
+    }
+
     set_order: list[str] = []
     set_players: dict[str, list[dict]] = {}
     for p in player_rows:
@@ -407,8 +438,16 @@ def _load_auction_from_db(auction_id: str) -> dict:
         if s not in set_players:
             set_players[s] = []
             set_order.append(s)
+        master = master_by_name.get((p["name"] or "").strip().lower(), {})
         set_players[s].append(
-            {"player_name": p["name"], "set": s, "base_price": p["base_price"]}
+            {
+                "player_name": p["name"],
+                "set": s,
+                "base_price": p["base_price"],
+                "role": (master.get("role") if isinstance(master, dict) else None) or "",
+                "photo": master.get("photo") if isinstance(master, dict) else None,
+                "photo_mime": master.get("photo_mime") if isinstance(master, dict) else None,
+            }
         )
 
     teams: dict[str, dict] = {}
@@ -921,7 +960,7 @@ elif st.session_state.page == "players":
                             st.markdown(
                                 f"**{html.escape(a['auction_name'] or '(unnamed)')}** — {dt} · "
                                 f"Sold to <b style='color:{a['team_color']}'>"
-                                f"{html.escape(a['team_name'])}</b> for **₹{a['sold_price']}**"
+                                f"{html.escape(a['team_name'])}</b> for **{fmt_money(a['sold_price'])}**"
                                 f"{rtm_tag}",
                                 unsafe_allow_html=True,
                             )
@@ -1079,17 +1118,17 @@ elif st.session_state.page == "teams":
                                  if p["name"].lower() == (t["captain"] or "").lower()),
                                 None,
                             )
-                        _edit_options = [None] + _edit_player_ids
                         _edit_index = (
-                            _edit_options.index(_current_cap_id)
-                            if _current_cap_id in _edit_options
-                            else 0
+                            _edit_player_ids.index(_current_cap_id)
+                            if _current_cap_id in _edit_player_ids
+                            else None
                         )
                         new_cap_id = st.selectbox(
                             "Captain (search players)",
-                            options=_edit_options,
+                            options=_edit_player_ids,
                             index=_edit_index,
-                            format_func=lambda pid: "— pick a player —" if pid is None else _edit_player_label.get(pid, "?"),
+                            placeholder="Type to search…",
+                            format_func=lambda pid: _edit_player_label.get(pid, "?"),
                             key=f"edit_cap_id_{t['id']}",
                         )
                         new_cap = (
@@ -1219,7 +1258,7 @@ elif st.session_state.page == "teams":
                             with row_l:
                                 st.markdown(
                                     f"**{html.escape(name)}** — {dt} · "
-                                    f"`{a['status']}` · purse left ₹{a['remaining_purse']}"
+                                    f"`{a['status']}` · purse left {fmt_money(a['remaining_purse'])}"
                                     f"<br><span class='auction-id'>ID: {aid}</span>",
                                     unsafe_allow_html=True,
                                 )
@@ -1349,14 +1388,20 @@ elif st.session_state.page == "setup":
             # Captain picker: searchable dropdown backed by players_master.
             _all_players = cached_all_players()
             _player_id_to_label = {
-                p["id"]: f"{p['name']}" + (f" ({p['role']})" if p.get("role") else "")
+                p["id"]: p["name"] + (f" ({p['role']})" if p.get("role") else "")
                 for p in _all_players
             }
+            if not _all_players:
+                st.warning(
+                    "No players in the master list yet. Register players "
+                    "from the public `/?page=register` link or the Players page."
+                )
             new_captain_id = st.selectbox(
                 "Captain (search players)",
-                options=[None] + [p["id"] for p in _all_players],
-                index=0,
-                format_func=lambda pid: "— pick a player —" if pid is None else _player_id_to_label.get(pid, "?"),
+                options=[p["id"] for p in _all_players],
+                index=None,
+                placeholder="Type to search…",
+                format_func=lambda pid: _player_id_to_label.get(pid, "?"),
                 key="new_team_captain_id",
             )
             new_captain = (
@@ -1555,8 +1600,8 @@ elif st.session_state.page == "setup_players":
         st.caption(
             f"{draft.get('name') or '(unnamed auction)'} · "
             f"{len(teams_in_auction)} teams · "
-            f"purse ₹{draft['purse']} · "
-            f"base price ₹{draft['default_base_price']}"
+            f"purse {fmt_money(draft['purse'])} · "
+            f"base price {fmt_money(draft['default_base_price'])}"
         )
     with head_r:
         st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
@@ -1577,7 +1622,7 @@ elif st.session_state.page == "setup_players":
                 f"background:{t['color']}; color:{fg}; margin-bottom:0.4rem;'>"
                 f"<div style='font-weight:700;'>{html.escape(t['name'])}</div>"
                 f"<div style='font-size:0.82rem; opacity:0.9;'>"
-                f"👑 {html.escape(captain_name)} · ₹{cap_value} (placeholder)"
+                f"👑 {html.escape(captain_name)} · {fmt_money(cap_value)} (placeholder)"
                 f"</div></div>",
                 unsafe_allow_html=True,
             )
@@ -1611,20 +1656,7 @@ elif st.session_state.page == "setup_players":
             sel_state[p["id"]] = {"selected": False, "set": 1}
     st.session_state.setup_player_sel_state = sel_state
 
-    q = st.text_input(
-        "Search players by name or role",
-        key="player_pool_search",
-        placeholder="Type to filter…",
-    )
-    q_lower = (q or "").strip().lower()
-
     import pandas as _pd
-    filtered = [
-        p for p in pool_players
-        if not q_lower
-        or q_lower in (p["name"] or "").lower()
-        or q_lower in (p.get("role") or "").lower()
-    ]
 
     rows_for_editor = [
         {
@@ -1634,11 +1666,9 @@ elif st.session_state.page == "setup_players":
             "Role": p.get("role") or "",
             "Set": int(sel_state[p["id"]]["set"]),
         }
-        for p in filtered
+        for p in pool_players
     ]
     pool_df = _pd.DataFrame(rows_for_editor)
-
-    st.caption(f"Showing {len(filtered)} of {len(pool_players)} players")
 
     edited_df = st.data_editor(
         pool_df,
@@ -1651,28 +1681,48 @@ elif st.session_state.page == "setup_players":
             "Role": st.column_config.TextColumn(disabled=True),
             "Set": st.column_config.NumberColumn(min_value=1, max_value=99, step=1),
         },
-        height=420,
-        key=f"player_pool_editor_{q_lower}",  # remount when filter changes
+        height=460,
+        key="player_pool_editor",  # stable key — edits persist across reruns
     )
 
-    # Write the edits back into the persistent map
-    for _, row in edited_df.iterrows():
-        pid = int(row["id"])
-        sel_state[pid]["selected"] = bool(row["Pick"])
-        sel_state[pid]["set"] = int(row["Set"])
-
-    # Bulk helpers
-    bulk_cols = st.columns([1, 1, 3])
+    # Bulk helpers + Save button
+    bulk_cols = st.columns([1, 1, 2, 2])
     with bulk_cols[0]:
-        if st.button("Select all (filtered)", key="pool_select_all", use_container_width=True):
-            for p in filtered:
-                sel_state[p["id"]]["selected"] = True
-            st.rerun()
+        bulk_pick = st.button(
+            "Select all", key="pool_select_all", use_container_width=True
+        )
     with bulk_cols[1]:
-        if st.button("Clear all (filtered)", key="pool_clear_all", use_container_width=True):
-            for p in filtered:
-                sel_state[p["id"]]["selected"] = False
-            st.rerun()
+        bulk_clear = st.button(
+            "Clear all", key="pool_clear_all", use_container_width=True
+        )
+    with bulk_cols[3]:
+        save_pool = st.button(
+            "💾 Save player list",
+            key="pool_save",
+            type="primary",
+            use_container_width=True,
+        )
+
+    # Edits are only committed to sel_state when Save is clicked (or a bulk
+    # helper). That means unsaved checkboxes/Set edits in the grid won't
+    # affect the Start Auction pool until the user presses Save.
+    if bulk_pick:
+        for p in pool_players:
+            sel_state[p["id"]]["selected"] = True
+        # Bump the editor key so it picks up the new defaults
+        st.session_state.pop("player_pool_editor", None)
+        st.rerun()
+    if bulk_clear:
+        for p in pool_players:
+            sel_state[p["id"]]["selected"] = False
+        st.session_state.pop("player_pool_editor", None)
+        st.rerun()
+    if save_pool:
+        for _, row in edited_df.iterrows():
+            pid = int(row["id"])
+            sel_state[pid]["selected"] = bool(row["Pick"])
+            sel_state[pid]["set"] = int(row["Set"])
+        st.success("Player list saved.")
 
     random_in_set = st.toggle(
         "Randomise draw within each set",
@@ -1681,8 +1731,12 @@ elif st.session_state.page == "setup_players":
     )
     st.session_state.setup_random_in_set = bool(random_in_set)
 
-    selected_count = sum(1 for v in sel_state.values() if v["selected"])
-    st.caption(f"**{selected_count}** player(s) selected for the auction pool.")
+    saved_count = sum(1 for v in sel_state.values() if v["selected"])
+    pending_count = int(edited_df["Pick"].sum()) if "Pick" in edited_df.columns else 0
+    st.caption(
+        f"**{saved_count}** saved · **{pending_count}** ticked in the table "
+        f"(click **Save player list** to commit)."
+    )
 
     st.divider()
 
@@ -1798,6 +1852,9 @@ elif st.session_state.page == "setup_players":
                     )
                     oi += 1
 
+                # Build name→master-row map so we can carry photo + role through
+                players_by_name = {p["name"]: p for p in pool_players}
+
                 for s in ordered_sets:
                     bucket = list(by_set[s])
                     if random_in_set:
@@ -1810,6 +1867,9 @@ elif st.session_state.page == "setup_players":
                             "player_name": row["name"],
                             "set": set_key,
                             "base_price": default_base,
+                            "role": (players_by_name.get(row["name"]) or {}).get("role") or "",
+                            "photo": (players_by_name.get(row["name"]) or {}).get("photo"),
+                            "photo_mime": (players_by_name.get(row["name"]) or {}).get("photo_mime"),
                         }
                         for row in bucket
                     ]
@@ -1883,20 +1943,17 @@ elif st.session_state.page == "auction":
         bg = data["color"]
         fg = data.get("text_color") or "#ffffff"
 
-        if data["players"]:
+        # Captain is already called out in the header — don't duplicate in the list
+        non_captain_players = [p for p in data["players"] if not p.get("is_captain")]
+        if non_captain_players:
             rows = []
-            for p in data["players"]:
-                tags = []
-                if p.get("is_captain"):
-                    tags.append("👑")
-                if p.get("is_rtm"):
-                    tags.append("<span class='rtm-tag'>RTM</span>")
-                tag_html = " ".join(tags)
+            for p in non_captain_players:
+                tag_html = "<span class='rtm-tag'>RTM</span>" if p.get("is_rtm") else ""
                 prefix = f"{tag_html} " if tag_html else ""
                 rows.append(
                     f"<div class='player-row'>"
                     f"<div class='player-cell-name'>{prefix}{html.escape(str(p['player']))}</div>"
-                    f"<div class='player-cell-price{' rtm' if p.get('is_rtm') else ''}'>₹{p['sold']}</div>"
+                    f"<div class='player-cell-price{' rtm' if p.get('is_rtm') else ''}'>{fmt_money(p['sold'])}</div>"
                     f"</div>"
                 )
             player_html = f"<div class='player-list'>{''.join(rows)}</div>"
@@ -1926,7 +1983,7 @@ elif st.session_state.page == "auction":
             f"</div>"
             f"<div class='team-card-body'>"
             f"<div class='purse-row'>"
-            f"<div><div class='micro-label'>Purse</div><div class='team-purse'>₹{data['purse']}</div></div>"
+            f"<div><div class='micro-label'>Purse</div><div class='team-purse'>{fmt_money(data['purse'])}</div></div>"
             f"<div><div class='micro-label' style='text-align:right;'>Squad</div>"
             f"<div class='team-squad'>{bought}/{min_players}"
             f"<span class='squad-hint'>{min_hint}</span></div></div>"
@@ -2028,7 +2085,7 @@ elif st.session_state.page == "auction":
                 f"<div class='sold-player'>{html.escape(str(info.get('player','')))}</div>"
                 f"<div class='sold-to'>to</div>"
                 f"<div class='sold-team'>{html.escape(str(info.get('team','')))}</div>"
-                f"<div class='sold-price'>₹{info.get('price',0)}</div>"
+                f"<div class='sold-price'>{fmt_money(info.get('price',0))}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -2042,28 +2099,45 @@ elif st.session_state.page == "auction":
                 (function(){
                   try {
                     const parentDoc = window.parent.document;
+                    // Clear any leftover canvas from a previous burst
+                    parentDoc.querySelectorAll('canvas[data-nmtcc-confetti]').forEach(function(c){ c.remove(); });
+
                     const canvas = parentDoc.createElement('canvas');
+                    canvas.setAttribute('data-nmtcc-confetti', '1');
                     canvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647';
                     parentDoc.body.appendChild(canvas);
                     const myConfetti = confetti.create(canvas, { resize: true, useWorker: true });
                     const gold = ['#fde047','#facc15','#eab308','#fbbf24','#f59e0b','#d97706','#b45309'];
+                    // Short, punchy: all particles settle within ~2.5s
                     myConfetti({
-                      particleCount: 160, spread: 160, startVelocity: 55,
+                      particleCount: 140, spread: 150, startVelocity: 50,
                       origin: { y: 0.45 }, colors: gold,
-                      shapes: ['square','circle'], scalar: 1.2,
-                      gravity: 0.7, ticks: 300,
+                      shapes: ['square','circle'], scalar: 1.1,
+                      gravity: 1.1, ticks: 120,
                     });
                     setTimeout(function(){
-                      myConfetti({ particleCount: 70, angle: 60, spread: 70,
-                        origin: { x: 0, y: 0.7 }, colors: gold, scalar: 1.1 });
-                      myConfetti({ particleCount: 70, angle: 120, spread: 70,
-                        origin: { x: 1, y: 0.7 }, colors: gold, scalar: 1.1 });
-                    }, 280);
+                      myConfetti({ particleCount: 50, angle: 60, spread: 70,
+                        origin: { x: 0, y: 0.75 }, colors: gold, gravity: 1.1, ticks: 110 });
+                      myConfetti({ particleCount: 50, angle: 120, spread: 70,
+                        origin: { x: 1, y: 0.75 }, colors: gold, gravity: 1.1, ticks: 110 });
+                    }, 220);
+
+                    // Watch the dialog; remove the canvas as soon as the modal closes
+                    const dlgSelector = 'div[role="dialog"], div[data-testid="stDialog"]';
+                    let modalWasOpen = !!parentDoc.querySelector(dlgSelector);
+                    const watchId = setInterval(function(){
+                      const open = !!parentDoc.querySelector(dlgSelector);
+                      if (modalWasOpen && !open) {
+                        canvas.remove();
+                        clearInterval(watchId);
+                      }
+                    }, 150);
+
+                    // Hard cap so the canvas never lingers
                     setTimeout(function(){
-                      myConfetti({ particleCount: 50, spread: 110, startVelocity: 40,
-                        origin: { y: 0.35 }, colors: gold, shapes: ['star'], scalar: 0.9 });
-                    }, 600);
-                    setTimeout(function(){ canvas.remove(); }, 6000);
+                      canvas.remove();
+                      clearInterval(watchId);
+                    }, 3500);
                   } catch(e) { console.error('confetti failed', e); }
                 })();
                 </script>
@@ -2153,13 +2227,39 @@ elif st.session_state.page == "auction":
     left, right = st.columns([1, 1], gap="medium")
 
     with left:
+        player_photo = player.get("photo")
+        player_photo_mime = player.get("photo_mime")
+        player_role = player.get("role") or ""
+        photo_uri = logo_data_uri(player_photo, player_photo_mime) if player_photo else None
+        photo_html = (
+            f"<img src='{photo_uri}' style='width:90px; height:90px; border-radius:14px; "
+            f"object-fit:cover; background:rgba(255,255,255,0.1); border:2px solid rgba(255,255,255,0.15);' />"
+            if photo_uri
+            else (
+                f"<div style='width:90px; height:90px; border-radius:14px; "
+                f"background:rgba(255,255,255,0.12); display:flex; align-items:center; "
+                f"justify-content:center; font-size:2rem; font-weight:800;'>"
+                f"{html.escape(str(player['player_name'])[:1].upper())}</div>"
+            )
+        )
+        role_html = (
+            f"<div class='hero-player-role'>{html.escape(player_role)}</div>"
+            if player_role
+            else ""
+        )
         st.markdown(
             f"""
             <div class='hero'>
-              <div class='hero-player-name'>{html.escape(str(player['player_name']))}</div>
-              <div class='hero-player-meta'>Set: {html.escape(str(current_set))} · Base: ₹{base_price}</div>
+              <div style='display:flex; gap:1.1rem; align-items:flex-start;'>
+                <div>{photo_html}</div>
+                <div style='flex:1;'>
+                  <div class='hero-player-name'>{html.escape(str(player['player_name']))}</div>
+                  {role_html}
+                  <div class='hero-player-meta'>Set: {html.escape(str(current_set))} · Base: {fmt_money(base_price)}</div>
+                </div>
+              </div>
               <div class='hero-bid-label'>Current Bid</div>
-              <div class='hero-bid-value'>₹{st.session_state.bid}</div>
+              <div class='hero-bid-value'>{fmt_money(st.session_state.bid)}</div>
               <div class='hero-bidder'>Top bidder: <b>{html.escape(str(bid_team_current))}</b></div>
             </div>
             """,
@@ -2170,9 +2270,9 @@ elif st.session_state.page == "auction":
         # Header row: next-step indicator + base reset
         r1, r2 = st.columns([4, 1])
         with r1:
-            ladder_parts = [f"<{t['up_to']}→+{t['step']}" for t in tiers]
+            ladder_parts = [f"<{fmt_money(t['up_to'])} → +{fmt_money(t['step'])}" for t in tiers]
             ladder_str = "; ".join(ladder_parts)
-            st.caption(f"Next bid step: **+₹{next_step}** (ladder: {ladder_str})")
+            st.caption(f"Next bid step: **+{fmt_money(next_step)}** (ladder: {ladder_str})")
         with r2:
             if st.button("↺ Base", key="reset_bid", use_container_width=True, help="Reset bid and top bidder"):
                 st.session_state.bid = base_price
@@ -2221,9 +2321,9 @@ elif st.session_state.page == "auction":
             # Can't bid against your own standing bid
             is_disabled = (not can_afford) or is_active
             if is_active:
-                label = f"👑 {tname}  ·  ₹{int(st.session_state.bid)}"
+                label = f"👑 {tname}  ·  {fmt_money(int(st.session_state.bid))}"
             else:
-                label = f"{tname}  ·  ₹{preview_next}"
+                label = f"{tname}  ·  {fmt_money(preview_next)}"
 
             with btn_cols[i % 2]:
                 clicked = st.button(
@@ -2248,15 +2348,33 @@ elif st.session_state.page == "auction":
         with sell_cols[0]:
             sell_disabled = st.session_state.current_bid_team is None
             sell_label = (
-                f"✅ SELL to {st.session_state.current_bid_team} @ ₹{st.session_state.bid}"
+                f"✅ SELL to {st.session_state.current_bid_team} @ {fmt_money(st.session_state.bid)}"
                 if st.session_state.current_bid_team
                 else "Pick a bidding team"
             )
+            # Tint the SELL button with the buying team's colors
+            if st.session_state.current_bid_team:
+                _td = st.session_state.teams[st.session_state.current_bid_team]
+                _bg = _td["color"]
+                _fg = _td.get("text_color") or "#ffffff"
+                st.markdown(
+                    f"<style>"
+                    f".st-key-sell_button button {{"
+                    f"  background: {_bg} !important; color: {_fg} !important;"
+                    f"  border: 2px solid {_bg} !important; font-weight: 800 !important;"
+                    f"}}"
+                    f".st-key-sell_button button:hover:not(:disabled) {{"
+                    f"  filter: brightness(1.08);"
+                    f"}}"
+                    f"</style>",
+                    unsafe_allow_html=True,
+                )
             sell_clicked = st.button(
                 sell_label,
                 type="primary",
                 use_container_width=True,
                 disabled=sell_disabled,
+                key="sell_button",
             )
         with sell_cols[1]:
             rtm_disabled = (
@@ -2269,7 +2387,7 @@ elif st.session_state.page == "auction":
                 disabled=rtm_disabled,
             ):
                 st.caption(
-                    f"Pick the team exercising RTM at ₹{st.session_state.bid}. "
+                    f"Pick the team exercising RTM at {fmt_money(st.session_state.bid)}. "
                     f"They win the player and their RTM count drops by 1."
                 )
                 for tname, tdata in st.session_state.teams.items():
@@ -2296,16 +2414,19 @@ elif st.session_state.page == "auction":
                         st.session_state.current_bid_team = None
                         st.rerun()
         with sell_cols[2]:
-            unsold_help = (
-                "Remove this player for good (no one wants them)"
-                if phase == "unsold"
-                else "Park this player in the unsold pile; they return after all sets are done"
-            )
+            has_bid = st.session_state.current_bid_team is not None
+            if has_bid:
+                unsold_help = "Disabled — a bid has been placed. Use SELL or reset to Base."
+            elif phase == "unsold":
+                unsold_help = "Remove this player for good (no one wants them)"
+            else:
+                unsold_help = "Park this player in the unsold pile; they return after all sets are done"
             if st.button(
                 "🚫 Unsold",
                 key="unsold_btn",
                 use_container_width=True,
                 help=unsold_help,
+                disabled=has_bid,
             ):
                 log_event(
                     st.session_state.auction_id,
@@ -2380,17 +2501,17 @@ elif st.session_state.page == "auction":
                 ts = ev.get("ts", "")[11:19]
                 etype = ev["type"]
                 if etype == "bid":
-                    body = f"<b>{html.escape(ev.get('team',''))}</b> bid <b>₹{ev.get('amount','')}</b>"
+                    body = f"<b>{html.escape(ev.get('team',''))}</b> bid <b>{fmt_money(ev.get('amount',0))}</b>"
                 elif etype == "sell":
-                    body = f"Sold <b>{html.escape(ev.get('player',''))}</b> to <b>{html.escape(ev.get('team',''))}</b> for <b>₹{ev.get('amount','')}</b>"
+                    body = f"Sold <b>{html.escape(ev.get('player',''))}</b> to <b>{html.escape(ev.get('team',''))}</b> for <b>{fmt_money(ev.get('amount',0))}</b>"
                 elif etype == "rtm_used":
-                    body = f"<b>{html.escape(ev.get('team',''))}</b> used RTM on <b>{html.escape(ev.get('player',''))}</b> (₹{ev.get('amount','')})"
+                    body = f"<b>{html.escape(ev.get('team',''))}</b> used RTM on <b>{html.escape(ev.get('player',''))}</b> ({fmt_money(ev.get('amount',0))})"
                 elif etype == "rtm_triggered":
-                    body = f"RTM offered to <b>{html.escape(ev.get('old_team',''))}</b> against <b>{html.escape(ev.get('new_team',''))}</b> on <b>{html.escape(ev.get('player',''))}</b> @ ₹{ev.get('amount','')}"
+                    body = f"RTM offered to <b>{html.escape(ev.get('old_team',''))}</b> against <b>{html.escape(ev.get('new_team',''))}</b> on <b>{html.escape(ev.get('player',''))}</b> @ {fmt_money(ev.get('amount',0))}"
                 elif etype == "rtm_skipped":
                     body = f"<b>{html.escape(ev.get('old_team',''))}</b> skipped RTM on <b>{html.escape(ev.get('player',''))}</b>"
                 elif etype == "new_player":
-                    body = f"New player: <b>{html.escape(ev.get('player',''))}</b> (set {html.escape(str(ev.get('set','')))}, base ₹{ev.get('base','')})"
+                    body = f"New player: <b>{html.escape(ev.get('player',''))}</b> (set {html.escape(str(ev.get('set','')))}, base {fmt_money(ev.get('base',0))})"
                 elif etype in ("trade_proposed", "trade_accepted", "trade_rejected"):
                     body = f"Trade {etype.split('_')[1]}: <b>{html.escape(ev.get('team_a',''))}</b> ↔ <b>{html.escape(ev.get('team_b',''))}</b>"
                 elif etype == "unsold":
@@ -2509,7 +2630,7 @@ elif st.session_state.page == "report":
         st.title(a.get("name") or "Auction Report")
         dt = a["auction_datetime"].strftime("%Y-%m-%d %H:%M") if a.get("auction_datetime") else ""
         st.caption(
-            f"{dt} · status: {a['status']} · purse: ₹{a['purse']} · "
+            f"{dt} · status: {a['status']} · purse: {fmt_money(a['purse'])} · "
             f"players/team (min): {a['players_per_team']} · "
             f"RTM: {'on' if a['rtm_enabled'] else 'off'}"
         )
@@ -2526,12 +2647,12 @@ elif st.session_state.page == "report":
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Players sold", total_sold)
-    m2.metric("Total spend", f"₹{total_spend}")
+    m2.metric("Total spend", fmt_money(total_spend))
     m3.metric("Teams", len(teams))
     if max_player:
         m4.metric(
             "Top buy",
-            f"₹{max_player['sold_price']}",
+            fmt_money(max_player['sold_price']),
             delta=f"{max_player['player_name']} → {max_player['team_name']}",
             delta_color="off",
         )
@@ -2558,20 +2679,16 @@ elif st.session_state.page == "report":
         bg = data["color"]
         fg = data.get("text_color") or "#ffffff"
 
-        if data["players"]:
+        non_captain_players = [p for p in data["players"] if not p.get("is_captain")]
+        if non_captain_players:
             rows = []
-            for p in sorted(data["players"], key=lambda x: -x["sold"]):
-                tags = []
-                if p.get("is_captain"):
-                    tags.append("👑")
-                if p.get("is_rtm"):
-                    tags.append("<span class='rtm-tag'>RTM</span>")
-                tag_html = " ".join(tags)
+            for p in sorted(non_captain_players, key=lambda x: -x["sold"]):
+                tag_html = "<span class='rtm-tag'>RTM</span>" if p.get("is_rtm") else ""
                 prefix = f"{tag_html} " if tag_html else ""
                 rows.append(
                     f"<div class='player-row'>"
                     f"<div class='player-cell-name'>{prefix}{html.escape(str(p['player']))}</div>"
-                    f"<div class='player-cell-price{' rtm' if p.get('is_rtm') else ''}'>₹{p['sold']}</div>"
+                    f"<div class='player-cell-price{' rtm' if p.get('is_rtm') else ''}'>{fmt_money(p['sold'])}</div>"
                     f"</div>"
                 )
             player_html = f"<div class='player-list' style='max-height:none;'>{''.join(rows)}</div>"
@@ -2592,9 +2709,9 @@ elif st.session_state.page == "report":
             f"</div>"
             f"<div class='team-card-body'>"
             f"<div class='purse-row'>"
-            f"<div><div class='micro-label'>Spent</div><div class='team-purse'>₹{spent}</div></div>"
+            f"<div><div class='micro-label'>Spent</div><div class='team-purse'>{fmt_money(spent)}</div></div>"
             f"<div><div class='micro-label' style='text-align:right;'>Remaining</div>"
-            f"<div class='team-squad' style='color:#065f46;'>₹{data['purse']}</div></div>"
+            f"<div class='team-squad' style='color:#065f46;'>{fmt_money(data['purse'])}</div></div>"
             f"</div>"
             f"<div class='purse-row' style='margin-top:0.6rem;'>"
             f"<div><div class='micro-label'>Squad</div><div class='team-squad'>{bought}/{min_players}"
