@@ -183,7 +183,8 @@ st.markdown(
         height: 100%; background: linear-gradient(90deg, #10b981, #14b8a6);
         border-radius: 999px; transition: width 0.3s;
     }
-    .progress-bar-fill.over { background: linear-gradient(90deg, #8b5cf6, #6366f1); }
+    .progress-bar-fill.low { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .progress-bar-fill.critical { background: linear-gradient(90deg, #ef4444, #dc2626); }
     .player-list {
         max-height: 240px; overflow-y: auto; font-size: 0.88rem;
         border-top: 1px solid #f3f4f6; padding-top: 0.2rem;
@@ -836,10 +837,17 @@ elif st.session_state.page == "auction":
         st.session_state.bid_tiers = DEFAULT_BID_TIERS
 
     # ---------------- Helpers ----------------
-    def _render_team_card(name: str, data: dict, is_active: bool, min_players: int, rtm_enabled: bool) -> str:
+    def _render_team_card(name: str, data: dict, is_active: bool, min_players: int, rtm_enabled: bool, total_purse: int) -> str:
         bought = len(data["players"])
-        pct = min(100, int(round(100 * bought / max(1, min_players))))
         over = bought > min_players
+        purse_left = int(data["purse"])
+        pct = min(100, max(0, int(round(100 * purse_left / max(1, total_purse)))))
+        if pct >= 50:
+            bar_cls = ""
+        elif pct >= 20:
+            bar_cls = " low"
+        else:
+            bar_cls = " critical"
         safe_name = html.escape(name)
         safe_cap = html.escape(data.get("captain") or "—")
         bg = data["color"]
@@ -883,8 +891,8 @@ elif st.session_state.page == "auction":
             f"<div class='team-squad'>{bought}/{min_players}"
             f"<span class='squad-hint'>{min_hint}</span></div></div>"
             f"</div>"
-            f"<div class='progress-bar'>"
-            f"<div class='progress-bar-fill{' over' if over else ''}' style='width:{pct}%'></div>"
+            f"<div class='progress-bar' title='Purse remaining'>"
+            f"<div class='progress-bar-fill{bar_cls}' style='width:{pct}%'></div>"
             f"</div>"
             f"{player_html}"
             f"</div>"
@@ -896,6 +904,7 @@ elif st.session_state.page == "auction":
         n = len(teams_items)
         cols_per_row = 3 if n <= 9 else 4 if n <= 12 else 5
         min_players = int(st.session_state.players_per_team)
+        total_purse = int(st.session_state.purse)
         rtm_on = bool(st.session_state.rtm_enabled)
 
         for row_start in range(0, n, cols_per_row):
@@ -904,7 +913,7 @@ elif st.session_state.page == "auction":
             for i, (name, data) in enumerate(row):
                 with cols[i]:
                     st.markdown(
-                        _render_team_card(name, data, name == active_team, min_players, rtm_on),
+                        _render_team_card(name, data, name == active_team, min_players, rtm_on, total_purse),
                         unsafe_allow_html=True,
                     )
 
@@ -1350,8 +1359,16 @@ elif st.session_state.page == "report":
     # elif block so define a thin local version for the report.
     def _report_card(name: str, data: dict, min_players: int) -> str:
         bought = len(data["players"])
-        pct = min(100, int(round(100 * bought / max(1, min_players))))
         over = bought > min_players
+        total_purse = int(a["purse"])
+        purse_left = int(data["purse"])
+        pct = min(100, max(0, int(round(100 * purse_left / max(1, total_purse)))))
+        if pct >= 50:
+            bar_cls = ""
+        elif pct >= 20:
+            bar_cls = " low"
+        else:
+            bar_cls = " critical"
         safe_name = html.escape(name)
         safe_cap = html.escape(data.get("captain") or "—")
         bg = data["color"]
@@ -1389,8 +1406,8 @@ elif st.session_state.page == "report":
             f"<div><div class='micro-label'>Squad</div><div class='team-squad'>{bought}/{min_players}"
             f"<span class='squad-hint'>{min_hint}</span></div></div>"
             f"</div>"
-            f"<div class='progress-bar'>"
-            f"<div class='progress-bar-fill{' over' if over else ''}' style='width:{pct}%'></div>"
+            f"<div class='progress-bar' title='Purse remaining'>"
+            f"<div class='progress-bar-fill{bar_cls}' style='width:{pct}%'></div>"
             f"</div>"
             f"{player_html}"
             f"</div>"
