@@ -27,7 +27,9 @@ from db import (
     update_auction_status,
     update_bid_tiers,
     update_master_team,
+    update_master_team_logo,
 )
+from logos import avatar_html, logo_data_uri, process_uploaded_logo
 from event_log import log_event, read_events
 from sync_queue import enqueue, stats as sync_stats
 
@@ -372,6 +374,8 @@ def _load_auction_from_db(auction_id: str) -> dict:
             "captain": t["captain"],
             "color": t["color"],
             "text_color": t.get("text_color") or "#ffffff",
+            "logo": t.get("logo"),
+            "logo_mime": t.get("logo_mime"),
             "purse": t["remaining_purse"],
             "players": [],
             "rtm_remaining": t["rtm_remaining"],
@@ -654,12 +658,17 @@ elif st.session_state.page == "teams":
                 c1, c2, c3 = st.columns([4, 1, 1])
                 with c1:
                     fg = t.get("text_color") or "#ffffff"
+                    avatar = avatar_html(
+                        t["name"],
+                        t.get("logo"),
+                        t.get("logo_mime"),
+                        t["color"],
+                        fg,
+                        size_px=48,
+                    )
                     st.markdown(
                         f"<div style='display:flex; align-items:center; gap:0.9rem;'>"
-                        f"<div style='width:46px; height:46px; border-radius:10px; "
-                        f"background:{t['color']}; color:{fg}; display:flex; "
-                        f"align-items:center; justify-content:center; font-weight:800;'>"
-                        f"{html.escape(t['name'][:1].upper())}</div>"
+                        f"{avatar}"
                         f"<div><div style='font-size:1.15rem; font-weight:700;'>"
                         f"{html.escape(t['name'])}</div>"
                         f"<div style='color:#64748b; font-size:0.88rem;'>"
@@ -693,24 +702,64 @@ elif st.session_state.page == "teams":
                                 value=t.get("text_color") or "#ffffff",
                                 key=f"edit_fg_{t['id']}",
                             )
+
+                        # Logo management
+                        new_logo_upload = st.file_uploader(
+                            "Replace logo",
+                            type=["png", "jpg", "jpeg", "webp"],
+                            key=f"edit_logo_{t['id']}",
+                        )
+                        new_logo_bytes = None
+                        new_logo_mime = None
+                        if new_logo_upload is not None:
+                            try:
+                                new_logo_bytes, new_logo_mime = process_uploaded_logo(new_logo_upload)
+                            except Exception as e:
+                                st.error(f"Could not read logo: {e}")
+
+                        # Preview uses the (possibly new) values
+                        preview_logo_bytes = new_logo_bytes or t.get("logo")
+                        preview_logo_mime = new_logo_mime or t.get("logo_mime")
+                        preview_avatar = avatar_html(
+                            new_name.strip() or "T",
+                            preview_logo_bytes,
+                            preview_logo_mime,
+                            new_bg,
+                            new_fg,
+                            size_px=40,
+                        )
                         preview_label = (
                             (new_name.strip() or "Team")
                             + " · "
                             + (new_cap.strip() or "Captain")
                         )
                         st.markdown(
+                            f"<div style='display:flex; align-items:center; gap:0.6rem; margin:0.4rem 0;'>"
+                            f"{preview_avatar}"
                             f"<div style='padding:0.5rem 1rem; border-radius:999px; "
-                            f"background:{new_bg}; color:{new_fg}; text-align:center; "
-                            f"font-weight:600; display:inline-block; margin:0.4rem 0;'>"
-                            f"{html.escape(preview_label)}</div>",
+                            f"background:{new_bg}; color:{new_fg}; font-weight:600;'>"
+                            f"{html.escape(preview_label)}</div>"
+                            f"</div>",
                             unsafe_allow_html=True,
                         )
-                        if st.button(
-                            "Save",
-                            key=f"edit_save_{t['id']}",
-                            use_container_width=True,
-                            type="primary",
-                        ):
+
+                        btn_save, btn_clear = st.columns([2, 1])
+                        with btn_save:
+                            save_clicked = st.button(
+                                "Save",
+                                key=f"edit_save_{t['id']}",
+                                use_container_width=True,
+                                type="primary",
+                            )
+                        with btn_clear:
+                            clear_logo_clicked = st.button(
+                                "Clear logo",
+                                key=f"edit_clear_{t['id']}",
+                                use_container_width=True,
+                                disabled=t.get("logo") is None and new_logo_bytes is None,
+                            )
+
+                        if save_clicked:
                             nn = new_name.strip()
                             if not nn:
                                 st.error("Team name required")
@@ -722,9 +771,19 @@ elif st.session_state.page == "teams":
                                     update_master_team(
                                         t["id"], nn, new_cap.strip(), new_bg, new_fg
                                     )
+                                    if new_logo_bytes:
+                                        update_master_team_logo(
+                                            t["id"], new_logo_bytes, new_logo_mime
+                                        )
                                     invalidate_master_teams_cache()
                                     st.success("Updated")
                                     st.rerun()
+
+                        if clear_logo_clicked:
+                            update_master_team_logo(t["id"], None, None)
+                            invalidate_master_teams_cache()
+                            st.success("Logo cleared")
+                            st.rerun()
                 with c3:
                     st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
@@ -877,6 +936,8 @@ elif st.session_state.page == "setup":
                 "captain": team["captain"],
                 "color": team["color"],
                 "text_color": team.get("text_color") or "#ffffff",
+                "logo": team.get("logo"),
+                "logo_mime": team.get("logo_mime"),
             }
         )
         # Reset the selectbox so it returns to the placeholder
@@ -903,12 +964,35 @@ elif st.session_state.page == "setup":
                 new_color = st.color_picker("Background", value="#3b82f6", key="new_team_bg")
             with c_fg:
                 new_text_color = st.color_picker("Text Colour", value="#ffffff", key="new_team_fg")
+            new_logo_upload = st.file_uploader(
+                "Logo (optional)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="new_team_logo",
+            )
 
+            logo_bytes = None
+            logo_mime = None
+            if new_logo_upload is not None:
+                try:
+                    logo_bytes, logo_mime = process_uploaded_logo(new_logo_upload)
+                except Exception as e:
+                    st.error(f"Could not read logo: {e}")
+
+            preview_avatar = avatar_html(
+                new_name.strip() or "T",
+                logo_bytes,
+                logo_mime,
+                new_color,
+                new_text_color,
+                size_px=36,
+            )
             preview_label = (new_name.strip() or "Team") + " · " + (new_captain.strip() or "Captain")
             st.markdown(
-                f"<div style='padding:0.5rem 1rem; border-radius:999px; display:inline-block; "
-                f"background:{new_color}; color:{new_text_color}; font-weight:600; margin:0.4rem 0;'>"
-                f"{preview_label}</div>",
+                f"<div style='display:flex; align-items:center; gap:0.6rem; margin:0.4rem 0;'>"
+                f"{preview_avatar}"
+                f"<div style='padding:0.5rem 1rem; border-radius:999px; background:{new_color}; "
+                f"color:{new_text_color}; font-weight:600;'>{html.escape(preview_label)}</div>"
+                f"</div>",
                 unsafe_allow_html=True,
             )
 
@@ -928,6 +1012,8 @@ elif st.session_state.page == "setup":
                         team_id = create_master_team(
                             nn, new_captain.strip(), new_color, new_text_color
                         )
+                        if logo_bytes:
+                            update_master_team_logo(team_id, logo_bytes, logo_mime)
                         invalidate_master_teams_cache()
                         st.session_state.setup_selected_teams.append(
                             {
@@ -936,10 +1022,12 @@ elif st.session_state.page == "setup":
                                 "captain": new_captain.strip(),
                                 "color": new_color,
                                 "text_color": new_text_color,
+                                "logo": logo_bytes,
+                                "logo_mime": logo_mime,
                             }
                         )
                         # clear the form fields for the next entry
-                        for k in ("new_team_name", "new_team_captain"):
+                        for k in ("new_team_name", "new_team_captain", "new_team_logo"):
                             if k in st.session_state:
                                 del st.session_state[k]
                         st.rerun()
@@ -1020,6 +1108,8 @@ elif st.session_state.page == "setup":
                         "captain": t["captain"],
                         "color": t["color"],
                         "text_color": t.get("text_color") or "#ffffff",
+                        "logo": t.get("logo"),
+                        "logo_mime": t.get("logo_mime"),
                         "purse": int(purse),
                         "players": [],
                         "rtm_remaining": int(rtm_count) if rtm_enabled else 0,
@@ -1114,12 +1204,16 @@ elif st.session_state.page == "auction":
             cls = "rtm-pill" if cnt > 0 else "rtm-pill none"
             rtm_html = f"<div class='{cls}' style='margin-top:0.35rem;'>RTM × {cnt}</div>"
 
+        avatar = avatar_html(name, data.get("logo"), data.get("logo_mime"), bg, fg, size_px=42)
         return (
             f"<div class='team-card{' active' if is_active else ''}'>"
             f"<div class='team-card-header' style='background:{bg}; color:{fg};'>"
-            f"<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem;'>"
+            f"<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:0.6rem;'>"
+            f"<div style='display:flex; gap:0.7rem; align-items:center;'>"
+            f"{avatar}"
             f"<div><div class='team-card-title'>{safe_name}</div>"
             f"<div class='team-card-captain'>Captain: {safe_cap}</div></div>"
+            f"</div>"
             f"{rtm_html}"
             f"</div>"
             f"</div>"
@@ -1190,6 +1284,8 @@ elif st.session_state.page == "auction":
             "team": team_name,
             "color": td["color"],
             "text_color": td.get("text_color") or "#ffffff",
+            "logo": td.get("logo"),
+            "logo_mime": td.get("logo_mime"),
             "price": int(price),
             "is_rtm": bool(is_rtm),
         }
@@ -1206,10 +1302,21 @@ elif st.session_state.page == "auction":
         def _show_sold_modal():
             info = st.session_state.last_sold or {}
             rtm_badge = "<div class='sold-rtm'>⚡ VIA RTM</div>" if info.get("is_rtm") else ""
+            logo_uri = logo_data_uri(info.get("logo"), info.get("logo_mime"))
+            if logo_uri:
+                logo_html = (
+                    f"<img src='{logo_uri}' class='sold-logo' "
+                    f"style='width:92px; height:92px; border-radius:16px; object-fit:cover; "
+                    f"background:rgba(255,255,255,0.15); margin-bottom:0.8rem;' alt='' />"
+                )
+            else:
+                logo_html = ""
+
             st.markdown(
                 f"<div class='sold-card' style='background:{info.get('color','#1e293b')}; "
                 f"color:{info.get('text_color','#ffffff')};'>"
                 f"{rtm_badge}"
+                f"{logo_html}"
                 f"<div class='sold-label'>SOLD</div>"
                 f"<div class='sold-player'>{html.escape(str(info.get('player','')))}</div>"
                 f"<div class='sold-to'>to</div>"
@@ -1218,6 +1325,45 @@ elif st.session_state.page == "auction":
                 f"</div>",
                 unsafe_allow_html=True,
             )
+
+            # Golden confetti, rendered on the parent document so it covers the dialog.
+            import streamlit.components.v1 as _components
+            _components.html(
+                """
+                <script src='https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js'></script>
+                <script>
+                (function(){
+                  try {
+                    const parentDoc = window.parent.document;
+                    const canvas = parentDoc.createElement('canvas');
+                    canvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647';
+                    parentDoc.body.appendChild(canvas);
+                    const myConfetti = confetti.create(canvas, { resize: true, useWorker: true });
+                    const gold = ['#fde047','#facc15','#eab308','#fbbf24','#f59e0b','#d97706','#b45309'];
+                    myConfetti({
+                      particleCount: 160, spread: 160, startVelocity: 55,
+                      origin: { y: 0.45 }, colors: gold,
+                      shapes: ['square','circle'], scalar: 1.2,
+                      gravity: 0.7, ticks: 300,
+                    });
+                    setTimeout(function(){
+                      myConfetti({ particleCount: 70, angle: 60, spread: 70,
+                        origin: { x: 0, y: 0.7 }, colors: gold, scalar: 1.1 });
+                      myConfetti({ particleCount: 70, angle: 120, spread: 70,
+                        origin: { x: 1, y: 0.7 }, colors: gold, scalar: 1.1 });
+                    }, 280);
+                    setTimeout(function(){
+                      myConfetti({ particleCount: 50, spread: 110, startVelocity: 40,
+                        origin: { y: 0.35 }, colors: gold, shapes: ['star'], scalar: 0.9 });
+                    }, 600);
+                    setTimeout(function(){ canvas.remove(); }, 6000);
+                  } catch(e) { console.error('confetti failed', e); }
+                })();
+                </script>
+                """,
+                height=0,
+            )
+
             if st.button("Continue →", type="primary", use_container_width=True, key="dismiss_sold"):
                 st.rerun()
 
@@ -1721,11 +1867,15 @@ elif st.session_state.page == "report":
 
         min_hint = f"min {min_players}" if not over else f"+{bought - min_players} over min"
         spent = int(a["purse"]) - int(data["purse"])
+        avatar = avatar_html(name, data.get("logo"), data.get("logo_mime"), bg, fg, size_px=42)
         return (
             f"<div class='team-card'>"
             f"<div class='team-card-header' style='background:{bg}; color:{fg};'>"
-            f"<div class='team-card-title'>{safe_name}</div>"
-            f"<div class='team-card-captain'>Captain: {safe_cap}</div>"
+            f"<div style='display:flex; gap:0.7rem; align-items:center;'>"
+            f"{avatar}"
+            f"<div><div class='team-card-title'>{safe_name}</div>"
+            f"<div class='team-card-captain'>Captain: {safe_cap}</div></div>"
+            f"</div>"
             f"</div>"
             f"<div class='team-card-body'>"
             f"<div class='purse-row'>"

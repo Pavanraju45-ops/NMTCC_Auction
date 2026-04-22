@@ -24,10 +24,14 @@ CREATE TABLE IF NOT EXISTS teams_master (
     captain TEXT,
     color TEXT NOT NULL,
     text_color TEXT NOT NULL DEFAULT '#ffffff',
+    logo BYTEA,
+    logo_mime TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS text_color TEXT NOT NULL DEFAULT '#ffffff';
+ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS logo BYTEA;
+ALTER TABLE teams_master ADD COLUMN IF NOT EXISTS logo_mime TEXT;
 
 CREATE TABLE IF NOT EXISTS auctions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -120,19 +124,35 @@ def init_schema() -> None:
 
 # ---------- teams master ----------
 
+_TEAM_COLS = "id, name, captain, color, text_color, logo, logo_mime"
+
+
 def list_master_teams():
     with get_cursor() as cur:
-        cur.execute("SELECT id, name, captain, color, text_color FROM teams_master ORDER BY name")
+        cur.execute(f"SELECT {_TEAM_COLS} FROM teams_master ORDER BY name")
         return cur.fetchall()
 
 
 def get_master_team_by_name(name: str):
     with get_cursor() as cur:
         cur.execute(
-            "SELECT id, name, captain, color, text_color FROM teams_master WHERE name = %s",
+            f"SELECT {_TEAM_COLS} FROM teams_master WHERE name = %s",
             (name,),
         )
         return cur.fetchone()
+
+
+def update_master_team_logo(team_id: int, logo_bytes, logo_mime: str | None) -> None:
+    """logo_bytes=None clears the logo."""
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE teams_master SET logo = %s, logo_mime = %s WHERE id = %s",
+            (
+                psycopg2.Binary(logo_bytes) if logo_bytes else None,
+                logo_mime if logo_bytes else None,
+                team_id,
+            ),
+        )
 
 
 def create_master_team(name: str, captain: str, color: str, text_color: str) -> int:
@@ -252,7 +272,7 @@ def get_auction_teams_full(auction_id: str):
         cur.execute(
             """
             SELECT at.team_id, at.remaining_purse, at.rtm_remaining,
-                   tm.name, tm.captain, tm.color, tm.text_color
+                   tm.name, tm.captain, tm.color, tm.text_color, tm.logo, tm.logo_mime
             FROM auction_teams at
             JOIN teams_master tm ON tm.id = at.team_id
             WHERE at.auction_id = %s
