@@ -8,7 +8,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Local dev: .env via python-dotenv. Streamlit Community Cloud: secrets.toml
+# entry surfaced through st.secrets. Either is fine; env wins if both set.
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    try:
+        import streamlit as st  # imported lazily to avoid a hard dep here
+
+        DATABASE_URL = st.secrets.get("DATABASE_URL")  # type: ignore[attr-defined]
+    except Exception:
+        DATABASE_URL = None
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS admins (
